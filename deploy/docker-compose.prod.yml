@@ -1,0 +1,87 @@
+# Production stack for duoclieuhk.vn — self-contained.
+# Bring up:   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod up -d --build
+# Tear down:  docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod down -v
+#             (one command removes every container + the postgres volume = clean wipe)
+#
+# Ports are bound to 127.0.0.1 ONLY — the host nginx reverse-proxies the public domains to them.
+name: hkgroup
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nats:
+    image: nats:2.10-alpine
+    restart: unless-stopped
+    command: ["-js"]
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command: ["migrate", "up"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      MIGRATIONS_DIR: /db/migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command: ["api"]
+    restart: unless-stopped
+    env_file: .env.prod
+    volumes:
+      - uploaddata:/data        # encrypted KYC images at rest
+    ports:
+      - "127.0.0.1:18080:8080"   # host nginx -> api.duoclieuhk.vn
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    ports:
+      - "127.0.0.1:13000:3000"   # host nginx -> duoclieuhk.vn + admin.duoclieuhk.vn
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  uploaddata:

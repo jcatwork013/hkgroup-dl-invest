@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply text-cream antialiased font-sans;
+  /* off-canvas drawer trượt khỏi mép phải khi đóng — chặn scroll ngang.
+     Dùng clip (không phải hidden) để không tạo scroll-container phá sticky header. */
+  overflow-x: clip;
+  background: #0b1f13;
+  min-height: 100dvh;
+}
+
+/* Nền gradient cố định: dùng lớp fixed riêng (compose trên GPU) thay cho
+   background-attachment:fixed — KHÔNG repaint mỗi frame khi cuộn → hết giật. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 620px at 78% -8%, #235338 0%, rgba(16,39,26,0) 55%),
+    radial-gradient(900px 520px at -5% 0%, #173a23 0%, rgba(11,31,19,0) 52%),
+    linear-gradient(165deg, #10291b 0%, #0b1f13 55%, #081710 100%);
+}
+
+h1, h2, h3 {
+  @apply font-serif tracking-tight;
+}
+
+/* tables (admin) */
+table { @apply w-full text-left text-sm; }
+th { @apply whitespace-nowrap px-3 py-2 text-xs font-semibold uppercase tracking-wide text-cream/45; }
+td { @apply whitespace-nowrap px-3 py-3 text-cream/85; }
+tbody tr { @apply border-t border-white/10; }
+
+/* faint botanical texture overlay */
+.leaf-overlay {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: .05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220' viewBox='0 0 220 220'%3E%3Cg fill='none' stroke='%23d8b863' stroke-width='1.2'%3E%3Cpath d='M30 190C30 110 70 70 150 60c0 80-40 120-120 130z'/%3E%3Cpath d='M40 175c30-55 65-80 100-90'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 360px 360px;
+}

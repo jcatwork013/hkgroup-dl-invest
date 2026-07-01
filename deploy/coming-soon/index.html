@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Dược Liệu HK — Sắp ra mắt</title>
+<meta name="description" content="Website Dược Liệu HK đang được hoàn thiện. Vui lòng quay lại sau." />
+<meta name="robots" content="noindex" />
+<style>
+  :root { --green:#1f7a4d; --green-d:#155c39; --gold:#c9a24a; --ink:#0f2417; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; }
+  body {
+    font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #eaf5ee;
+    background: radial-gradient(1200px 600px at 50% -10%, #2b8a5b 0%, var(--green-d) 40%, var(--ink) 100%);
+    min-height: 100dvh; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 24px; overflow: hidden; position: relative;
+  }
+  .leaf { position:absolute; opacity:.08; font-size:240px; line-height:1; user-select:none; }
+  .leaf.l1 { top:-40px; left:-30px; transform:rotate(-20deg); }
+  .leaf.l2 { bottom:-60px; right:-30px; transform:rotate(160deg); }
+  .card { position:relative; z-index:1; max-width: 640px; }
+  .badge {
+    display:inline-flex; align-items:center; gap:8px;
+    border:1px solid rgba(201,162,74,.5); color:var(--gold);
+    padding:6px 14px; border-radius:999px; font-size:13px; letter-spacing:.12em;
+    text-transform:uppercase; margin-bottom:28px;
+  }
+  .brand {
+    height:130px; width:auto; margin:0 auto 24px; display:block;
+    background:#fff; padding:14px 20px; border-radius:20px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.4);
+  }
+  h1 { font-size: clamp(30px, 6vw, 52px); font-weight:800; letter-spacing:-.01em; }
+  h1 .accent { color: var(--gold); }
+  .tag { margin-top:14px; font-size: clamp(16px,2.6vw,20px); color:#bfe2cd; }
+  .sub { margin-top:10px; font-size:15px; color:#9cc7ad; }
+  .bar { height:6px; width:240px; max-width:80%; margin:34px auto 0; background:rgba(255,255,255,.12); border-radius:999px; overflow:hidden; }
+  .bar > span { display:block; height:100%; width:42%; border-radius:999px;
+    background: linear-gradient(90deg, var(--gold), #f0d693);
+    animation: load 2.6s ease-in-out infinite; }
+  @keyframes load { 0%{ width:18%; } 50%{ width:78%; } 100%{ width:18%; } }
+  .contact { margin-top:34px; font-size:14px; color:#bfe2cd; }
+  .contact a { color:#fff; text-decoration:none; border-bottom:1px solid rgba(255,255,255,.4); }
+  footer { position:absolute; bottom:18px; left:0; right:0; font-size:12px; color:#7fae92; z-index:1; }
+  @media (prefers-reduced-motion: reduce){ .bar>span{ animation:none; width:50%; } }
+</style>
+</head>
+<body>
+  <div class="leaf l1">🌿</div>
+  <div class="leaf l2">🌿</div>
+  <main class="card">
+    <span class="badge">Sắp ra mắt · Coming soon</span>
+    <img class="brand" src="/logo.png" alt="HKGroup — Dược Liệu Lên Men" />
+    <h1>Dược Liệu <span class="accent">HK</span></h1>
+    <p class="tag">Website đang được xây dựng &amp; hoàn thiện</p>
+    <p class="sub">Chúng tôi sẽ sớm trở lại. Cảm ơn bạn đã ghé thăm.</p>
+    <div class="bar"><span></span></div>
+    <div class="contact">
+      <p>Hotline: <a href="tel:0948579759">0948 579 759</a> · Email: <a href="mailto:info@duoclieuhk.vn">info@duoclieuhk.vn</a></p>
+      <p style="margin-top:6px;color:#9cc7ad">Số 18B1 Đường B1, khu dân cư Hưng Phú, phường Hưng Phú, TP Cần Thơ</p>
+    </div>
+  </main>
+  <footer>© <span id="y"></span> HKGroup · Since 2026. All rights reserved.</footer>
+  <script>document.getElementById('y').textContent = new Date().getFullYear();</script>
+</body>
+</html>

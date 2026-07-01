@@ -1,0 +1,24 @@
+# Env
+deploy/.env
+*.env.prod
+*.env.local
+
+# DB dumps / backups (contain real user data & secrets)
+backup_*.sql
+deploy/backup_*.sql
+
+# Go
+/backend/bin/
+*.test
+*.out
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+frontend/.env*.local
+npm-debug.log*
+
+# Misc
+.DS_Store
+*.log
