@@ -92,6 +92,7 @@ type Product struct {
 	CategoryID   uuid.NullUUID      `json:"category_id"`
 	Sku          string             `json:"sku"`
 	Name         string             `json:"name"`
+	Slug         string             `json:"slug"`
 	Badge        string             `json:"badge"`
 	PriceVnd     int64              `json:"price_vnd"`
 	CostVnd      int64              `json:"cost_vnd"`

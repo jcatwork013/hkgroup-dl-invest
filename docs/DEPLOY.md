@@ -5,21 +5,26 @@
 ```
 Người dùng ─► Cloudflare (proxy, SSL Full strict) ─► host nginx (62.146.239.31) ─► container (docker compose, bind 127.0.0.1)
 
-duoclieuhk.vn  / www   ─► nginx static  /var/www/duoclieuhk         (trang "Coming Soon")
-invest.duoclieuhk.vn   ─► nginx ─► 127.0.0.1:13000  (web — Next.js app đầu tư)
+duoclieuhk.vn  / www   ─► nginx ─► 127.0.0.1:13000  (web — Next.js app đầu tư; trang chính)
+                          + /api/*  ─► 127.0.0.1:18080  (same-origin API)
+invest.duoclieuhk.vn   ─► nginx ─► 127.0.0.1:13000  (web — cùng app; giữ tương thích link cũ)
                           + /api/*  ─► 127.0.0.1:18080  (same-origin API)
 admin.duoclieuhk.vn    ─► nginx ─► 127.0.0.1:13000  (cùng app; "/" 302 → /admin)
                           + /api/*  ─► 127.0.0.1:18080  (same-origin API)
-api.duoclieuhk.vn      ─► nginx ─► 127.0.0.1:18080  (backend Go API — cho client ngoài; app KHÔNG phụ thuộc)
+api-web.duoclieuhk.vn  ─► nginx ─► 127.0.0.1:18080  (backend Go API — host API chính của web app)
+api.duoclieuhk.vn      ─► nginx ─► 127.0.0.1:18080  (DÀNH RIÊNG cho hệ product/order sync — hiện tạm trỏ backend invest)
 ```
 
-> **Same-origin API:** Frontend gọi `/api/*` ngay trên chính host của nó (`invest`/`admin`), nginx
-> proxy về backend. Nhờ vậy app **không phụ thuộc** việc `api.duoclieuhk.vn` resolve hay CORS →
-> tránh hẳn lỗi `ERR_NAME_NOT_RESOLVED`. `api.duoclieuhk.vn` vẫn giữ cho client/tích hợp bên ngoài.
-> Build frontend với `NEXT_PUBLIC_API_URL=` (rỗng) = dùng đường dẫn tương đối.
+> **Same-origin API:** Frontend gọi `/api/*` ngay trên chính host của nó (`duoclieuhk.vn`/`invest`/`admin`),
+> nginx proxy về backend. Nhờ vậy app **không phụ thuộc** hostname API riêng hay CORS →
+> tránh hẳn lỗi `ERR_NAME_NOT_RESOLVED`. Build frontend với `NEXT_PUBLIC_API_URL=` (rỗng) = đường dẫn tương đối.
+>
+> **`api-web.duoclieuhk.vn`** = host API chính cho client/tích hợp ngoài của web app đầu tư.
+> **`api.duoclieuhk.vn`** được **để dành cho hệ đồng bộ product & đơn hàng** (tích hợp với folder `hkgroup`);
+> hiện tại tạm trỏ về cùng backend invest cho tới khi hệ product/order riêng lên.
 
 - TLS: Let's Encrypt (webroot `/var/www/html`) trên origin, tương thích Cloudflare **Full (strict)**.
-  Certs: `duoclieuhk.vn` (+www), `invest.duoclieuhk.vn`, `admin.duoclieuhk.vn`, `api.duoclieuhk.vn`.
+  Certs: `duoclieuhk.vn` (+www), `invest.duoclieuhk.vn`, `admin.duoclieuhk.vn`, `api.duoclieuhk.vn`, `api-web.duoclieuhk.vn`.
   Tự gia hạn qua certbot timer + deploy-hook reload nginx (`/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh`).
 - Ports 3000/8080 đã bị app khác chiếm → stack này bind **127.0.0.1:13000** (web) và **127.0.0.1:18080** (api).
 

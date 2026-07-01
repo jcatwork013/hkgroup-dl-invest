@@ -195,8 +195,9 @@ function ProductsInner() {
               <div className="mt-2 flex items-center gap-2">
                 <span className="text-xs text-cream/40">hoặc</span>
                 <input
-                  type="url"
-                  placeholder="Dán link ảnh (https://...)"
+                  type="text"
+                  inputMode="url"
+                  placeholder="Dán link ảnh hoặc /api/v1/public/images/..."
                   value={form.image_url}
                   onChange={(e) => setForm({ ...form, image_url: e.target.value })}
                   className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs text-cream placeholder:text-cream/35 focus:border-gold-500 focus:outline-none"

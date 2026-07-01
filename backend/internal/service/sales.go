@@ -34,6 +34,33 @@ func slugify(s string) string {
 	return strings.Trim(s, "-")
 }
 
+// viUnaccent bỏ dấu tiếng Việt (đã lowercase) → ASCII, để slug sản phẩm đẹp & chuẩn SEO.
+var viUnaccent = strings.NewReplacer(
+	"à", "a", "á", "a", "ả", "a", "ã", "a", "ạ", "a",
+	"ă", "a", "ằ", "a", "ắ", "a", "ẳ", "a", "ẵ", "a", "ặ", "a",
+	"â", "a", "ầ", "a", "ấ", "a", "ẩ", "a", "ẫ", "a", "ậ", "a",
+	"è", "e", "é", "e", "ẻ", "e", "ẽ", "e", "ẹ", "e",
+	"ê", "e", "ề", "e", "ế", "e", "ể", "e", "ễ", "e", "ệ", "e",
+	"ì", "i", "í", "i", "ỉ", "i", "ĩ", "i", "ị", "i",
+	"ò", "o", "ó", "o", "ỏ", "o", "õ", "o", "ọ", "o",
+	"ô", "o", "ồ", "o", "ố", "o", "ổ", "o", "ỗ", "o", "ộ", "o",
+	"ơ", "o", "ờ", "o", "ớ", "o", "ở", "o", "ỡ", "o", "ợ", "o",
+	"ù", "u", "ú", "u", "ủ", "u", "ũ", "u", "ụ", "u",
+	"ư", "u", "ừ", "u", "ứ", "u", "ử", "u", "ữ", "u", "ự", "u",
+	"ỳ", "y", "ý", "y", "ỷ", "y", "ỹ", "y", "ỵ", "y",
+	"đ", "d",
+)
+
+// slugifyVN: slug bỏ dấu tiếng Việt. Không bao giờ trả rỗng (fallback "sp").
+func slugifyVN(s string) string {
+	s = viUnaccent.Replace(strings.ToLower(strings.TrimSpace(s)))
+	s = strings.Trim(slugNonWord.ReplaceAllString(s, "-"), "-")
+	if s == "" {
+		return "sp"
+	}
+	return s
+}
+
 // ----------------------------- Danh mục -----------------------------
 
 type CategoryInput struct {
@@ -116,6 +143,7 @@ type ProductInput struct {
 	CategoryID   string `json:"category_id"`
 	Sku          string `json:"sku"`
 	Name         string `json:"name"`
+	Slug         string `json:"slug"`
 	Badge        string `json:"badge"`
 	PriceVnd     int64  `json:"price_vnd"`
 	CostVnd      int64  `json:"cost_vnd"`
@@ -152,6 +180,22 @@ func (s *SalesService) GetProduct(ctx context.Context, id uuid.UUID) (db.Product
 	return p, err
 }
 
+// ---- API CÔNG KHAI (website bán hàng duoclieuhk.vn, không cần đăng nhập) ----
+
+// ListActiveProducts: chỉ sản phẩm đang bán, cho trang danh mục công khai.
+func (s *SalesService) ListActiveProducts(ctx context.Context) ([]db.Product, error) {
+	return s.store.ListActiveProducts(ctx)
+}
+
+// GetActiveProductBySlug: chi tiết sản phẩm công khai theo slug (chỉ hàng đang bán).
+func (s *SalesService) GetActiveProductBySlug(ctx context.Context, slug string) (db.Product, error) {
+	p, err := s.store.GetActiveProductBySlug(ctx, slug)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Product{}, ErrNotFound
+	}
+	return p, err
+}
+
 // withSpecDefaults áp giá trị mặc định 4 thông số nếu admin để trống.
 func (in *ProductInput) withSpecDefaults() {
 	if in.SpecWarranty == "" {
@@ -176,11 +220,16 @@ func (s *SalesService) CreateProduct(ctx context.Context, admin uuid.UUID, in Pr
 	if strings.TrimSpace(in.Sku) == "" {
 		in.Sku = "SP-" + slugify(in.Name)
 	}
+	if strings.TrimSpace(in.Slug) == "" {
+		in.Slug = slugifyVN(in.Name)
+	} else {
+		in.Slug = slugifyVN(in.Slug)
+	}
 	var p db.Product
 	err := s.store.ExecTx(ctx, func(q *db.Queries) error {
 		var e error
 		p, e = q.CreateProduct(ctx, db.CreateProductParams{
-			CategoryID: in.categoryUUID(), Sku: in.Sku, Name: strings.TrimSpace(in.Name), Badge: in.Badge,
+			CategoryID: in.categoryUUID(), Sku: in.Sku, Name: strings.TrimSpace(in.Name), Slug: in.Slug, Badge: in.Badge,
 			PriceVnd: in.PriceVnd, CostVnd: in.CostVnd, ImageUrl: in.ImageUrl, Summary: in.Summary,
 			Description: in.Description, SpecWarranty: in.SpecWarranty, SpecTrace: in.SpecTrace,
 			SpecDelivery: in.SpecDelivery, SpecReturn: in.SpecReturn, Active: in.Active,
@@ -204,11 +253,21 @@ func (s *SalesService) UpdateProduct(ctx context.Context, admin, id uuid.UUID, i
 	if strings.TrimSpace(in.Sku) == "" {
 		in.Sku = "SP-" + slugify(in.Name)
 	}
+	// Giữ slug cũ khi admin không nhập slug mới → không vỡ URL SEO đã index.
+	if strings.TrimSpace(in.Slug) == "" {
+		if cur, e := s.store.GetProduct(ctx, id); e == nil && cur.Slug != "" {
+			in.Slug = cur.Slug
+		} else {
+			in.Slug = slugifyVN(in.Name)
+		}
+	} else {
+		in.Slug = slugifyVN(in.Slug)
+	}
 	var p db.Product
 	err := s.store.ExecTx(ctx, func(q *db.Queries) error {
 		var e error
 		p, e = q.UpdateProduct(ctx, db.UpdateProductParams{
-			ID: id, CategoryID: in.categoryUUID(), Sku: in.Sku, Name: strings.TrimSpace(in.Name), Badge: in.Badge,
+			ID: id, CategoryID: in.categoryUUID(), Sku: in.Sku, Name: strings.TrimSpace(in.Name), Slug: in.Slug, Badge: in.Badge,
 			PriceVnd: in.PriceVnd, CostVnd: in.CostVnd, ImageUrl: in.ImageUrl, Summary: in.Summary,
 			Description: in.Description, SpecWarranty: in.SpecWarranty, SpecTrace: in.SpecTrace,
 			SpecDelivery: in.SpecDelivery, SpecReturn: in.SpecReturn, Active: in.Active,

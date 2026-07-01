@@ -28,7 +28,12 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toPublicUser(u))
+	pu := toPublicUser(u)
+	// Kèm trạng thái affiliate để shop hiển thị đúng (khách / chờ duyệt / đã là CTV).
+	writeJSON(w, http.StatusOK, struct {
+		publicUser
+		AffiliateStatus string `json:"affiliate_status"`
+	}{pu, s.affiliate.Status(r.Context(), u)})
 }
 
 func (s *Server) handleSubmitKYC(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -214,7 +216,21 @@ func (s *SalesService) PayOrder(ctx context.Context, actor uuid.UUID, isAdmin bo
 			return e
 		}
 		detail.Order = paid
-		return audit.Write(ctx, q, audit.Actor(actor), "sales_order.pay", "sales_orders", o.ID.String(), o, paid)
+		if e := audit.Write(ctx, q, audit.Actor(actor), "sales_order.pay", "sales_orders", o.ID.String(), o, paid); e != nil {
+			return e
+		}
+
+		// TỰ ĐỘNG chia cổ tức ngay khi đơn thành công (nếu admin bật `dividend_auto_distribute`):
+		// gom 15% pool vừa trích → chia thẳng cho cổ đông, không cần bấm "Quét cổ tức", không cần
+		// duyệt (autoPay=true → vào thẳng ví). CÙNG transaction với thanh toán ⇒ nhất quán tuyệt đối.
+		// Chưa có cổ đông / không có gì để chia ⇒ bỏ qua, để đơn unswept chia sau (KHÔNG huỷ đơn).
+		if s.settings.Str(ctx, "dividend_auto_distribute", "off") == "on" {
+			if _, e := sweepUnsweptTx(ctx, q, actor, loadTieredConfig(ctx, s.settings), true); e != nil &&
+				!errors.Is(e, ErrNothingToSweep) && !errors.Is(e, ErrNoActiveShareholders) {
+				return e
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return OrderDetail{}, err
@@ -294,6 +310,60 @@ func (s *SalesService) ListOrdersBySeller(ctx context.Context, sellerID uuid.UUI
 	return s.store.ListSalesOrdersBySeller(ctx, sellerID)
 }
 
+// ----------------------------- Lịch sử đơn của KHÁCH (self-service) -----------------------------
+
+// CustomerOrderItem / CustomerOrder — DTO gọn cho trang "Đơn hàng của tôi" trên duoclieuhk.vn.
+// CỐ Ý không lộ seller/affiliate/breakdown (nội bộ) — khách chỉ thấy đơn của mình.
+type CustomerOrderItem struct {
+	Name         string `json:"name"`
+	Qty          int64  `json:"qty"`
+	LineTotalVnd int64  `json:"line_total_vnd"`
+}
+
+type CustomerOrder struct {
+	Code        string              `json:"code"`
+	Status      string              `json:"status"`
+	SubtotalVnd int64               `json:"subtotal_vnd"`
+	CreatedAt   time.Time           `json:"created_at"`
+	Items       []CustomerOrderItem `json:"items"`
+}
+
+// ListMyCustomerOrders trả lịch sử đơn của người đang đăng nhập, KHỚP THEO SĐT hồ sơ
+// (checkout công khai chỉ lưu customer_phone, không gắn user_id). SĐT rỗng → không có đơn.
+func (s *SalesService) ListMyCustomerOrders(ctx context.Context, userID uuid.UUID) ([]CustomerOrder, error) {
+	u, err := s.store.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	phone := strings.TrimSpace(u.Phone)
+	if phone == "" {
+		return []CustomerOrder{}, nil
+	}
+	orders, err := s.store.ListSalesOrdersByPhone(ctx, phone)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CustomerOrder, 0, len(orders))
+	for _, o := range orders {
+		items, err := s.store.ListSalesOrderItems(ctx, o.ID)
+		if err != nil {
+			return nil, err
+		}
+		lines := make([]CustomerOrderItem, 0, len(items))
+		for _, it := range items {
+			lines = append(lines, CustomerOrderItem{Name: it.Name, Qty: it.Qty, LineTotalVnd: it.LineTotalVnd})
+		}
+		out = append(out, CustomerOrder{
+			Code:        o.Code,
+			Status:      string(o.Status),
+			SubtotalVnd: o.SubtotalVnd,
+			CreatedAt:   o.CreatedAt.Time,
+			Items:       lines,
+		})
+	}
+	return out, nil
+}
+
 // ----------------------------- Giám sát saler -----------------------------
 
 func (s *SalesService) SalerStats(ctx context.Context) ([]db.SalerStatsRow, error) {
@@ -306,4 +376,14 @@ func (s *SalesService) ListSalers(ctx context.Context) ([]db.ListSalersRow, erro
 
 func (s *SalesService) ListMyCommissions(ctx context.Context, beneficiary uuid.UUID) ([]db.SalesCommission, error) {
 	return s.store.ListSalesCommissionsByBeneficiary(ctx, beneficiary)
+}
+
+// DeleteOrder — admin xoá đơn bán (CASCADE items/distributions/commissions). Audit lại.
+func (s *SalesService) DeleteOrder(ctx context.Context, admin, id uuid.UUID) error {
+	return s.store.ExecTx(ctx, func(q *db.Queries) error {
+		if e := q.DeleteSalesOrder(ctx, id); e != nil {
+			return e
+		}
+		return audit.Write(ctx, q, audit.Actor(admin), "sales_order.delete", "sales_orders", id.String(), nil, nil)
+	})
 }

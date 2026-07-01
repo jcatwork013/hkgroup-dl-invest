@@ -72,6 +72,27 @@ func (s *Server) handlePreviewTiered(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, plan)
 }
 
+// handleSweepPreview đọc số đơn paid chưa gộp + kế hoạch chia (không ghi) — cho nút "Quét cổ tức".
+func (s *Server) handleSweepPreview(w http.ResponseWriter, r *http.Request) {
+	res, err := s.distribution.SweepPreview(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleSweepDividend gom pool 15% của mọi đơn thành công chưa gộp thành 1 đợt cổ tức thực (backfill
+// cả đơn cũ ở lần đầu). Idempotent theo cột swept.
+func (s *Server) handleSweepDividend(w http.ResponseWriter, r *http.Request) {
+	res, err := s.distribution.SweepDividend(r.Context(), userID(r))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, res)
+}
+
 // handleDistributeTiered commits the 9%+6% plan as a real, audited dividend.
 func (s *Server) handleDistributeTiered(w http.ResponseWriter, r *http.Request) {
 	var in struct {

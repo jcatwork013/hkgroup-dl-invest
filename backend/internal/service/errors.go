@@ -13,4 +13,5 @@ var (
 	ErrKYCNotApproved    = errors.New("kyc not approved")
 	ErrOTPInvalid        = errors.New("otp invalid or expired")
 	ErrPoolExhausted     = errors.New("offering pool exhausted")
+	ErrAccountLocked     = errors.New("tài khoản đã bị khoá, vui lòng liên hệ quản trị")
 )

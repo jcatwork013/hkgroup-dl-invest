@@ -55,6 +55,48 @@ func newToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// genReadablePassword sinh mật khẩu ngẫu nhiên dễ đọc (bỏ ký tự dễ nhầm 0/O/1/l/I).
+func genReadablePassword() (string, error) {
+	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
+	b := make([]byte, 10)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	out := make([]byte, len(b))
+	for i, v := range b {
+		out[i] = alphabet[int(v)%len(alphabet)]
+	}
+	return "HK" + string(out), nil // prefix đảm bảo độ dài ≥8 & dễ nhận biết
+}
+
+// AdminSetNewPassword: admin đặt TRỰC TIẾP mật khẩu mới (ngẫu nhiên) cho user và TRẢ VỀ plaintext
+// để admin gửi cho người dùng. Không cần email/Resend. Vô hiệu hoá các token reset cũ.
+func (s *PasswordResetService) AdminSetNewPassword(ctx context.Context, admin, target uuid.UUID) (string, error) {
+	user, err := s.store.GetUserByID(ctx, target)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	pw, err := genReadablePassword()
+	if err != nil {
+		return "", err
+	}
+	hash, err := security.HashPassword(pw)
+	if err != nil {
+		return "", err
+	}
+	if err := s.store.UpdateUserPassword(ctx, db.UpdateUserPasswordParams{ID: user.ID, PasswordHash: hash}); err != nil {
+		return "", err
+	}
+	_ = s.store.DeleteUnusedPasswordResetTokens(ctx, user.ID)
+	if err := audit.Write(ctx, s.store.Queries, audit.Actor(admin), "user.admin_set_password", "users", target.String(), nil, nil); err != nil {
+		return "", err
+	}
+	return pw, nil
+}
+
 // mailer dựng Resend client từ cấu hình hiện hành; ok=false nếu chưa cấu hình.
 func (s *PasswordResetService) mailer(ctx context.Context) (*email.Resend, bool) {
 	apiKey, fromEmail, fromName, ok := s.settings.ResendConfig(ctx)
@@ -86,15 +128,26 @@ func (s *PasswordResetService) issueAndSend(ctx context.Context, m *email.Resend
 		return err
 	}
 	link := resetLink(baseURL, token)
-	subject := "Đặt lại mật khẩu"
-	body := fmt.Sprintf(`<div style="font-family:Arial,sans-serif;font-size:15px;color:#222;line-height:1.6">
-<p>Xin chào %s,</p>
-<p>Chúng tôi nhận được yêu cầu đặt lại mật khẩu cho tài khoản của bạn.</p>
-<p>Bấm vào nút bên dưới để tạo mật khẩu mới. Liên kết có hiệu lực trong <strong>1 giờ</strong> và chỉ dùng được một lần:</p>
-<p style="margin:24px 0"><a href="%s" style="background:#c9a24a;color:#1b2a23;text-decoration:none;padding:12px 22px;border-radius:9999px;font-weight:600">Đặt lại mật khẩu</a></p>
-<p style="font-size:13px;color:#666">Hoặc mở liên kết: <a href="%s">%s</a></p>
-<p style="font-size:13px;color:#666">Nếu bạn không yêu cầu, hãy bỏ qua email này — mật khẩu của bạn không thay đổi.</p>
-</div>`, html.EscapeString(user.FullName), link, link, link)
+	subject := "Đặt lại mật khẩu — HKGROUP"
+	body := fmt.Sprintf(`<div style="margin:0;padding:24px 0;background:#faf8f3">
+<div style="max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #eee7d8;border-radius:16px;overflow:hidden;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#333">
+  <div style="height:4px;background:linear-gradient(90deg,#b78a3c,#e0c079)"></div>
+  <div style="padding:28px 32px 6px;text-align:center">
+    <div style="font-size:22px;font-weight:700;color:#1f3d2a;letter-spacing:1px">HKGROUP</div>
+    <div style="font-size:12px;color:#a99f86;letter-spacing:2px;text-transform:uppercase;margin-top:2px">Dược liệu lên men</div>
+  </div>
+  <div style="padding:14px 36px 28px">
+    <h2 style="margin:0 0 14px;font-size:18px;color:#1f3d2a;font-weight:600;text-align:center">Đặt lại mật khẩu</h2>
+    <p style="margin:0 0 6px;font-size:14px;color:#555">Xin chào %s,</p>
+    <p style="margin:0 0 4px;font-size:14px;color:#555;line-height:1.7">Chúng tôi nhận được yêu cầu đặt lại mật khẩu cho tài khoản của bạn. Bấm nút bên dưới để tạo mật khẩu mới — liên kết có hiệu lực trong <b>1 giờ</b> và chỉ dùng một lần.</p>
+    <div style="text-align:center;margin:26px 0">
+      <a href="%s" style="background:#1f3d2a;color:#e8c877;text-decoration:none;padding:13px 30px;border-radius:9999px;font-weight:600;font-size:14px;display:inline-block">Đặt lại mật khẩu</a>
+    </div>
+    <p style="font-size:12px;color:#9a958a;text-align:center;word-break:break-all">Hoặc mở liên kết:<br/><a href="%s" style="color:#b78a3c">%s</a></p>
+    <p style="margin:18px 0 0;font-size:12px;color:#a99f86;text-align:center;line-height:1.7">Nếu bạn không yêu cầu, hãy bỏ qua email này — mật khẩu của bạn không thay đổi.</p>
+  </div>
+  <div style="background:#1f3d2a;padding:14px 24px;font-size:12px;color:#c9d3c9;text-align:center">© HKGROUP · duoclieuhk.vn</div>
+</div></div>`, html.EscapeString(user.FullName), link, link, link)
 
 	return m.Send(ctx, user.Email, subject, body)
 }

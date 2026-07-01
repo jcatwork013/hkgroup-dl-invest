@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/hkgroup/backend/internal/audit"
 	"github.com/hkgroup/backend/internal/db"
@@ -25,6 +27,27 @@ var allowedKeys = map[string]bool{
 	"contact_address": true,
 	"contact_email":   true,
 	"brand_since":     true,
+	// Thương hiệu + nội dung web bán hàng duoclieuhk.vn (admin cấu hình, shop đọc public).
+	"brand_name":      true,
+	"brand_tagline":   true,
+	"brand_logo_url":  true,
+	"seo_title":       true,
+	"seo_description": true,
+	"seo_keywords":    true,
+	"hero_subtitle":   true,
+	"footer_about":    true,
+	"social_facebook": true,
+	"social_youtube":  true,
+	"social_zalo":     true,
+	// Cơ chế hoa hồng bán hàng (mỗi đơn) — admin cấu hình % chia + KPI.
+	"sales_seller_rate":        true,
+	"sales_affiliate_rate":     true,
+	"sales_equalshare_rate":    true,
+	"sales_pool_rate":          true,
+	"sales_cost_rate":          true,
+	"sales_operations_rate":    true,
+	"sales_equalshare_min":     true,
+	"sales_kpi_monthly_target": true, // KPI doanh số/tháng cho CTV (VND)
 	// Company (legal-entity) receiving account — HARD CONSTRAINT 4: company account only.
 	"company_bank_code":    true,
 	"company_bank_name":    true,
@@ -38,6 +61,9 @@ var allowedKeys = map[string]bool{
 	"referral_f3_rate":       true,
 	"referral_investor_cash": true,
 	"show_pool_public":       true,
+	// Tự động chia cổ tức: "on" ⇒ mỗi đơn thành công tự gom 15% pool chia thẳng cho cổ đông (vào
+	// ví ngay, không cần bấm "Quét cổ tức"/duyệt). "off" ⇒ admin chủ động gom lô.
+	"dividend_auto_distribute": true,
 	// Tiered "đồng chia + bonus" distribution (9% equal + 6% band-bonus; all configurable).
 	"dist_equal_rate":    true,
 	"dist_bonus_rate":    true,
@@ -155,6 +181,46 @@ func (s *SettingsService) ResendConfig(ctx context.Context) (apiKey, fromEmail, 
 	fromName = m["resend_from_name"]
 	ok = apiKey != "" && fromEmail != ""
 	return apiKey, fromEmail, fromName, ok
+}
+
+// ----------------------------- Chính sách (Policy CMS) -----------------------------
+
+func (s *SettingsService) ListPolicies(ctx context.Context) ([]db.Policy, error) {
+	return s.store.ListPolicies(ctx)
+}
+func (s *SettingsService) ListActivePolicies(ctx context.Context) ([]db.Policy, error) {
+	return s.store.ListActivePolicies(ctx)
+}
+func (s *SettingsService) GetPolicy(ctx context.Context, slug string) (db.Policy, error) {
+	p, err := s.store.GetPolicy(ctx, slug)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Policy{}, ErrNotFound
+	}
+	return p, err
+}
+func (s *SettingsService) UpsertPolicy(ctx context.Context, admin uuid.UUID, in db.UpsertPolicyParams) (db.Policy, error) {
+	in.Slug = strings.TrimSpace(in.Slug)
+	if in.Slug == "" || strings.TrimSpace(in.Title) == "" {
+		return db.Policy{}, ErrValidation
+	}
+	var p db.Policy
+	err := s.store.ExecTx(ctx, func(q *db.Queries) error {
+		var e error
+		p, e = q.UpsertPolicy(ctx, in)
+		if e != nil {
+			return e
+		}
+		return audit.Write(ctx, q, audit.Actor(admin), "policy.upsert", "policies", in.Slug, nil, p)
+	})
+	return p, err
+}
+func (s *SettingsService) DeletePolicy(ctx context.Context, admin uuid.UUID, slug string) error {
+	return s.store.ExecTx(ctx, func(q *db.Queries) error {
+		if e := q.DeletePolicy(ctx, slug); e != nil {
+			return e
+		}
+		return audit.Write(ctx, q, audit.Actor(admin), "policy.delete", "policies", slug, nil, nil)
+	})
 }
 
 // Update upserts the given key/value pairs (admin only). Unknown keys are ignored.

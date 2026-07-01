@@ -31,6 +31,7 @@ import type {
   PoolStatus,
   ReferralsResponse,
   RevenueDistribution,
+  SweepResult,
   User,
   Wallet,
   WalletInfo,
@@ -314,6 +315,12 @@ export const adminApi = {
       method: "POST",
       auth: true,
     }),
+  // Duyệt 1 lần → chi trả TẤT CẢ payout của đợt cổ tức (hệ thống tính sẵn, tránh nhập tay).
+  payAllDividend: (id: string) =>
+    apiFetch<{ paid: number }>(`/api/v1/admin/dividends/${id}/pay-all`, {
+      method: "POST",
+      auth: true,
+    }),
   deleteDividend: (id: string) =>
     apiFetch<{ status: string }>(`/api/v1/admin/dividends/${id}`, {
       method: "DELETE",
@@ -328,12 +335,44 @@ export const adminApi = {
       body,
       auth: true,
     }),
-  // Admin gửi email link đặt lại mật khẩu cho 1 tài khoản.
+  // Admin đặt trực tiếp mật khẩu mới cho 1 tài khoản — trả về mật khẩu để gửi cho user.
   resetUserPassword: (id: string) =>
-    apiFetch<{ status: string }>(`/api/v1/admin/users/${id}/reset-password`, {
+    apiFetch<{ status: string; password: string }>(`/api/v1/admin/users/${id}/reset-password`, {
       method: "POST",
       auth: true,
     }),
+  // Đổi vai trò + khoá/mở tài khoản (không mất dữ liệu).
+  setUserRole: (id: string, role: string) =>
+    apiFetch<{ status: string }>(`/api/v1/admin/users/${id}/role`, { method: "POST", body: { role }, auth: true }),
+  lockUser: (id: string) =>
+    apiFetch<{ status: string }>(`/api/v1/admin/users/${id}/lock`, { method: "POST", auth: true }),
+  unlockUser: (id: string) =>
+    apiFetch<{ status: string }>(`/api/v1/admin/users/${id}/unlock`, { method: "POST", auth: true }),
+  lockedUsers: () =>
+    apiFetch<{ locked: string[] }>("/api/v1/admin/locked-users", { auth: true }),
+  // Admin xoá đơn bán (CASCADE items/hoa hồng).
+  deleteOrder: (id: string) =>
+    apiFetch<{ status: string }>(`/api/v1/admin/orders/${id}`, { method: "DELETE", auth: true }),
+  // Chính sách (Policy CMS)
+  policies: () =>
+    apiFetch<{ slug: string; title: string; summary: string; body: string; sort_order: number; active: boolean }[]>(
+      "/api/v1/admin/policies",
+      { auth: true }
+    ),
+  upsertPolicy: (body: { slug: string; title: string; summary: string; body: string; sort_order: number; active: boolean }) =>
+    apiFetch<unknown>("/api/v1/admin/policies", { method: "POST", body, auth: true }),
+  deletePolicy: (slug: string) =>
+    apiFetch<{ status: string }>(`/api/v1/admin/policies/${slug}`, { method: "DELETE", auth: true }),
+  // Yêu cầu trở thành Cộng tác viên (affiliate) — chờ admin duyệt.
+  affiliateRequests: () =>
+    apiFetch<{ user_id: string; full_name: string; email: string; phone: string; status: string; created_at: string }[]>(
+      "/api/v1/admin/affiliate-requests",
+      { auth: true }
+    ),
+  approveAffiliate: (id: string) =>
+    apiFetch<{ status: string }>(`/api/v1/admin/affiliate-requests/${id}/approve`, { method: "POST", auth: true }),
+  rejectAffiliate: (id: string) =>
+    apiFetch<{ status: string }>(`/api/v1/admin/affiliate-requests/${id}/reject`, { method: "POST", auth: true }),
   distributions: () =>
     apiFetch<RevenueDistribution[]>("/api/v1/admin/distributions", { auth: true }),
   distribute: (period: string, total_revenue: number) =>
@@ -359,6 +398,11 @@ export const adminApi = {
       body: { period, total_revenue },
       auth: true,
     }),
+  // Quét cổ tức: gom 15% pool đã trích của các đơn thành công chưa gộp (backfill đơn cũ ở lần đầu).
+  sweepPreview: () =>
+    apiFetch<SweepResult>("/api/v1/admin/distributions/sweep/preview", { auth: true }),
+  sweepDividend: () =>
+    apiFetch<SweepResult>("/api/v1/admin/distributions/sweep", { method: "POST", auth: true }),
   withdrawals: () =>
     apiFetch<AdminWithdrawalList>("/api/v1/admin/withdrawals", { auth: true }),
   processWithdrawal: (id: string, status: string) =>

@@ -362,3 +362,78 @@ func (s *Server) handleDeleteDividend(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
+
+// handlePayAllDividend: admin duyệt 1 lần → chi trả toàn bộ payout của đợt cổ tức (tự động).
+func (s *Server) handlePayAllDividend(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	paid, err := s.dividend.PayAll(r.Context(), userID(r), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"paid": paid})
+}
+
+// handleSetUserRole: admin đổi vai trò (thăng/giáng chức).
+func (s *Server) handleSetUserRole(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var in struct {
+		Role string `json:"role"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.identity.AdminSetRole(r.Context(), userID(r), id, in.Role); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "role": in.Role})
+}
+
+func (s *Server) handleLockUser(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.identity.AdminLock(r.Context(), userID(r), id); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "locked"})
+}
+
+func (s *Server) handleUnlockUser(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.identity.AdminUnlock(r.Context(), userID(r), id); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "unlocked"})
+}
+
+func (s *Server) handleListLockedUsers(w http.ResponseWriter, r *http.Request) {
+	ids, err := s.identity.ListLockedUserIDs(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, id.String())
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"locked": out})
+}

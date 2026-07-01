@@ -149,6 +149,9 @@ function WInner() {
                     {w.status === "approved" && (
                       <Button variant="secondary" onClick={() => process.mutate({ id: w.id, status: "paid" })} disabled={process.isPending}>Đánh dấu đã chi</Button>
                     )}
+                    {(w.status === "pending" || w.status === "approved") && (
+                      <PayoutQR userId={w.user_id} amount={w.amount} />
+                    )}
                     {(w.status === "paid" || w.status === "rejected") && <span className="text-xs text-cream/40">—</span>}
                   </td>
                 </tr>
@@ -157,6 +160,44 @@ function WInner() {
             </tbody>
           </table>
         </Card>
+      )}
+    </div>
+  );
+}
+
+// QR chuyển khoản trả hoa hồng cho CTV — dùng thông tin ngân hàng (đã lưu ở hồ sơ) + đúng số tiền.
+function PayoutQR({ userId, amount }: { userId: string; amount: number }) {
+  const [open, setOpen] = useState(false);
+  const { data: profile, isLoading } = useQuery({
+    queryKey: ["withdraw-profile", userId],
+    queryFn: () => adminApi.userProfile(userId),
+    enabled: open,
+  });
+  const code = profile?.bank_name ?? "";
+  const account = profile?.bank_account_number ?? "";
+  const qr =
+    code && account
+      ? `https://img.vietqr.io/image/${encodeURIComponent(code)}-${encodeURIComponent(account)}-compact2.png?amount=${amount}&addInfo=${encodeURIComponent("HK tra hoa hong")}&accountName=${encodeURIComponent(profile?.bank_account_name ?? "")}`
+      : "";
+  return (
+    <div className="mt-2">
+      <button onClick={() => setOpen((o) => !o)} className="text-xs text-gold-300 hover:underline">
+        {open ? "Ẩn QR" : "QR chuyển khoản"}
+      </button>
+      {open && (
+        <div className="mt-2 rounded-lg bg-white/5 p-3 text-center">
+          {isLoading ? (
+            <span className="text-xs text-cream/50">Đang tải...</span>
+          ) : qr ? (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={qr} alt="QR trả hoa hồng" className="mx-auto h-40 w-40 rounded bg-white p-1" />
+              <p className="mt-1 text-xs text-cream/70">{formatVnd(amount)} → {profile?.bank_account_name}</p>
+            </>
+          ) : (
+            <span className="text-xs text-red-300">CTV chưa nhập thông tin ngân hàng nhận hoa hồng.</span>
+          )}
+        </div>
       )}
     </div>
   );

@@ -16,54 +16,57 @@ import (
 
 // Server wires HTTP handlers to the application services.
 type Server struct {
-	jwt          *security.JWTManager
-	identity     *service.IdentityService
-	investment   *service.InvestmentService
-	referral     *service.ReferralService
-	dividend     *service.DividendService
-	dashboard    *service.DashboardService
-	settings     *service.SettingsService
-	profile      *service.ProfileService
-	distribution *service.DistributionService
+	jwt           *security.JWTManager
+	identity      *service.IdentityService
+	investment    *service.InvestmentService
+	referral      *service.ReferralService
+	dividend      *service.DividendService
+	dashboard     *service.DashboardService
+	settings      *service.SettingsService
+	profile       *service.ProfileService
+	distribution  *service.DistributionService
 	wallet        *service.WalletService
 	upload        *service.UploadService
 	sales         *service.SalesService
 	passwordReset *service.PasswordResetService
+	affiliate     *service.AffiliateService
 	corsOrigin    string
 }
 
 type Deps struct {
-	JWT          *security.JWTManager
-	Identity     *service.IdentityService
-	Investment   *service.InvestmentService
-	Referral     *service.ReferralService
-	Dividend     *service.DividendService
-	Dashboard    *service.DashboardService
-	Settings     *service.SettingsService
-	Profile      *service.ProfileService
-	Distribution *service.DistributionService
+	JWT           *security.JWTManager
+	Identity      *service.IdentityService
+	Investment    *service.InvestmentService
+	Referral      *service.ReferralService
+	Dividend      *service.DividendService
+	Dashboard     *service.DashboardService
+	Settings      *service.SettingsService
+	Profile       *service.ProfileService
+	Distribution  *service.DistributionService
 	Wallet        *service.WalletService
 	Upload        *service.UploadService
 	Sales         *service.SalesService
 	PasswordReset *service.PasswordResetService
+	Affiliate     *service.AffiliateService
 	CORSOrigin    string
 }
 
 func New(d Deps) *Server {
 	return &Server{
-		jwt:          d.JWT,
-		identity:     d.Identity,
-		investment:   d.Investment,
-		referral:     d.Referral,
-		dividend:     d.Dividend,
-		dashboard:    d.Dashboard,
-		settings:     d.Settings,
-		profile:      d.Profile,
-		distribution: d.Distribution,
+		jwt:           d.JWT,
+		identity:      d.Identity,
+		investment:    d.Investment,
+		referral:      d.Referral,
+		dividend:      d.Dividend,
+		dashboard:     d.Dashboard,
+		settings:      d.Settings,
+		profile:       d.Profile,
+		distribution:  d.Distribution,
 		wallet:        d.Wallet,
 		upload:        d.Upload,
 		sales:         d.Sales,
 		passwordReset: d.PasswordReset,
+		affiliate:     d.Affiliate,
 		corsOrigin:    d.CORSOrigin,
 	}
 }
@@ -108,15 +111,21 @@ func (s *Server) Router() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(s.rateLimit(authRL))
 			r.Post("/auth/register", s.handleRegister)
+			r.Post("/auth/register-customer", s.handleRegisterCustomer) // đăng ký KHÁCH HÀNG từ website
+			r.Post("/checkout", s.handlePublicCheckout)                 // khách đặt hàng online (giỏ hàng)
 			r.Post("/auth/login", s.handleLogin)
 			r.Post("/auth/refresh", s.handleRefresh)
 			r.Post("/auth/forgot-password", s.handleForgotPassword) // gửi link đặt lại mật khẩu
 			r.Post("/auth/reset-password", s.handleResetPassword)   // đặt mật khẩu mới bằng token
 		})
-		r.Get("/offering", s.handleGetOffering) // landing page data (no return promise)
-		r.Get("/settings", s.handleGetSettings) // public site settings (contact info, brand year)
-		r.Get("/pool", s.handleGetPool)         // public pool/fundraising status
+		r.Get("/offering", s.handleGetOffering)              // landing page data (no return promise)
+		r.Get("/settings", s.handleGetSettings)              // public site settings (contact info, brand year)
+		r.Get("/pool", s.handleGetPool)                      // public pool/fundraising status
 		r.Get("/public/images/{id}", s.handleGetPublicImage) // ảnh sản phẩm công khai
+		r.Get("/products", s.handlePublicProducts)           // catalog công khai cho web bán hàng
+		r.Get("/products/{slug}", s.handlePublicProductBySlug)
+		r.Get("/policies", s.handlePublicPolicies)
+		r.Get("/policies/{slug}", s.handlePublicPolicyBySlug)
 
 		// ----- investor (authenticated) -----
 		r.Group(func(r chi.Router) {
@@ -125,6 +134,8 @@ func (s *Server) Router() http.Handler {
 			r.Post("/me/password", s.handleChangePassword) // đổi mật khẩu — dùng chung cho investor & admin
 			r.Post("/kyc", s.handleSubmitKYC)
 			r.Post("/consent", s.handleConsent)
+			r.Post("/me/affiliate-request", s.handleAffiliateRequest) // khách xin làm CTV
+			r.Get("/me/orders", s.handleMyCustomerOrders)             // lịch sử đơn MUA của khách (khớp SĐT)
 			r.Get("/me/offering", s.handleGetMyOffering) // authed offering (active tiers)
 			r.Get("/me/dashboard", s.handleInvestorDashboard)
 			r.Get("/me/investments", s.handleMyInvestments)
@@ -135,7 +146,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/me/wallet", s.handleGetWallet)
 			r.Get("/me/withdrawals", s.handleListMyWithdrawals)
 			r.Post("/me/withdrawals", s.handleRequestWithdrawal)
-			r.Get("/me/dividend-wallet", s.handleGetDividendWallet)             // số dư cổ tức + lịch rút
+			r.Get("/me/dividend-wallet", s.handleGetDividendWallet)              // số dư cổ tức + lịch rút
 			r.Get("/me/dividend-withdrawals", s.handleListMyDividendWithdrawals) // lịch sử rút cổ tức
 			r.Post("/me/dividend-withdrawals", s.handleRequestDividendWithdrawal)
 
@@ -162,6 +173,8 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/admin/distributions/{id}", s.handleDeleteDistribution)
 			r.Post("/admin/distributions/tiered/preview", s.handlePreviewTiered)
 			r.Post("/admin/distributions/tiered", s.handleDistributeTiered)
+			r.Get("/admin/distributions/sweep/preview", s.handleSweepPreview)
+			r.Post("/admin/distributions/sweep", s.handleSweepDividend)
 			r.Get("/admin/withdrawals", s.handleListWithdrawals)
 			r.Post("/admin/withdrawals/{id}/process", s.handleProcessWithdrawal)
 			r.Get("/admin/wallets", s.handleAdminListWallets)
@@ -179,12 +192,21 @@ func (s *Server) Router() http.Handler {
 			r.Get("/admin/users/{id}/commissions", s.handleAdminUserCommissions)
 			r.Delete("/admin/users/{id}", s.handleDeleteUser)
 			r.Post("/admin/users/{id}/reset-password", s.handleAdminResetPassword)
+			r.Post("/admin/users/{id}/role", s.handleSetUserRole)  // đổi vai trò (thăng/giáng)
+			r.Post("/admin/users/{id}/lock", s.handleLockUser)     // khoá tài khoản
+			r.Post("/admin/users/{id}/unlock", s.handleUnlockUser) // mở khoá
+			r.Get("/admin/locked-users", s.handleListLockedUsers)
 
 			// Funding rounds (vòng gọi vốn) — admin mở vòng mới thủ công khi vòng cũ bán hết.
 			r.Get("/admin/offerings", s.handleListOfferings)
 			r.Post("/admin/offerings", s.handleOpenRound)
 
 			// Sales catalog — danh mục + sản phẩm (admin).
+			// Chính sách (Policy CMS)
+			r.Get("/admin/policies", s.handleAdminListPolicies)
+			r.Post("/admin/policies", s.handleAdminUpsertPolicy)
+			r.Delete("/admin/policies/{slug}", s.handleAdminDeletePolicy)
+
 			r.Get("/admin/categories", s.handleListCategories)
 			r.Post("/admin/categories", s.handleCreateCategory)
 			r.Put("/admin/categories/{id}", s.handleUpdateCategory)
@@ -197,7 +219,13 @@ func (s *Server) Router() http.Handler {
 
 			// Bán hàng — admin: toàn bộ đơn + giám sát saler.
 			r.Get("/admin/orders", s.handleListAllOrders)
+			r.Delete("/admin/orders/{id}", s.handleDeleteOrder)
 			r.Get("/admin/salers", s.handleSalerStats)
+
+			// Duyệt yêu cầu làm Cộng tác viên (affiliate).
+			r.Get("/admin/affiliate-requests", s.handleListAffiliateRequests)
+			r.Post("/admin/affiliate-requests/{id}/approve", s.handleApproveAffiliate)
+			r.Post("/admin/affiliate-requests/{id}/reject", s.handleRejectAffiliate)
 
 			// Tier management.
 			r.Get("/admin/tiers", s.handleListTiers)
@@ -219,6 +247,7 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/admin/dividends/{id}", s.handleDeleteDividend)
 			r.Get("/admin/dividends/{id}/payouts", s.handleListDividendPayouts)
 			r.Post("/admin/dividend-payouts/{id}/pay", s.handlePayDividend)
+			r.Post("/admin/dividends/{id}/pay-all", s.handlePayAllDividend) // duyệt 1 lần → chi trả tất cả
 		})
 
 		// ----- bán hàng: dùng chung admin + saler -----

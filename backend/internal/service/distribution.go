@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -226,9 +227,31 @@ type TieredPlan struct {
 // previewed for the pie chart without committing anything. Banding uses each account's TRUE
 // invested capital (amount_vnd), so a 50tr package lands on the 50tr boundary exactly.
 func PlanTiered(period string, revenue int64, accounts []db.ListActiveAccountsRow, cfg tieredConfig) TieredPlan {
-	n := len(accounts)
 	equalPool := int64(math.Floor(float64(revenue) * cfg.EqualRate))
 	bonusPool := int64(math.Floor(float64(revenue) * cfg.BonusRate))
+	return planTieredPools(period, revenue, equalPool, bonusPool, accounts, cfg)
+}
+
+// PlanTieredFromPool chia một Pool Cổ Đông ĐÃ TÍNH SẴN (vd tổng dividend_pool_vnd 15% của các đơn
+// được quét) theo đúng tỉ lệ đồng-chia:bonus (9:6) — KHÔNG cắt 15% thêm lần nữa. equalPool =
+// floor(pool × equalRate/(equalRate+bonusRate)); bonusPool = pool − equalPool, nên equalPool+
+// bonusPool == pool CHÍNH XÁC (bất biến: chia HẾT pool, không đẻ/mất đồng nào). revenue chỉ để hiển
+// thị (doanh thu gốc sinh ra pool).
+func PlanTieredFromPool(period string, revenue, pool int64, accounts []db.ListActiveAccountsRow, cfg tieredConfig) TieredPlan {
+	denom := cfg.EqualRate + cfg.BonusRate
+	var equalPool int64
+	if denom > 0 {
+		equalPool = int64(math.Floor(float64(pool) * cfg.EqualRate / denom))
+	}
+	bonusPool := pool - equalPool
+	return planTieredPools(period, revenue, equalPool, bonusPool, accounts, cfg)
+}
+
+// planTieredPools là lõi chung: nhận thẳng equalPool/bonusPool đã chốt rồi chia theo đồng-chia +
+// bonus hạng (Hamilton) + rollover phần dư. Dùng bởi cả PlanTiered (pool = % doanh thu) lẫn
+// PlanTieredFromPool (pool cho sẵn).
+func planTieredPools(period string, revenue, equalPool, bonusPool int64, accounts []db.ListActiveAccountsRow, cfg tieredConfig) TieredPlan {
+	n := len(accounts)
 
 	plan := TieredPlan{
 		Period: period, Revenue: revenue,
@@ -332,7 +355,13 @@ func bandSkeleton(cfg tieredConfig) []BandBreakdown {
 }
 
 func (s *DistributionService) tieredConfig(ctx context.Context) tieredConfig {
-	f := func(k string, d float64) float64 { return s.settings.Float(ctx, k, d) }
+	return loadTieredConfig(ctx, s.settings)
+}
+
+// loadTieredConfig đọc cấu hình tầng từ settings — dùng chung cho DistributionService lẫn luồng TỰ
+// ĐỘNG chia cổ tức trong SalesService.PayOrder (cùng package service).
+func loadTieredConfig(ctx context.Context, set *SettingsService) tieredConfig {
+	f := func(k string, d float64) float64 { return set.Float(ctx, k, d) }
 	return tieredConfig{
 		EqualRate: f("dist_equal_rate", 0.09),
 		BonusRate: f("dist_bonus_rate", 0.06),
@@ -341,7 +370,7 @@ func (s *DistributionService) tieredConfig(ctx context.Context) tieredConfig {
 			{Key: "band2", Label: "50–299tr", Max: int64(f("dist_band2_max", 300_000_000)), Rate: f("dist_band2_rate", 0.02)},
 			{Key: "band3", Label: "300–500tr", Max: math.MaxInt64, Rate: f("dist_band3_rate", 0.025)},
 		},
-		ResidualMode: s.settings.Str(ctx, "dist_residual_mode", "rollover"),
+		ResidualMode: set.Str(ctx, "dist_residual_mode", "rollover"),
 	}
 }
 
@@ -434,3 +463,172 @@ func (s *DistributionService) DistributeTiered(ctx context.Context, admin uuid.U
 }
 
 func pctStr(rate float64) string { return fmt.Sprintf("%g%%", rate*100) }
+
+// ---- Quét cổ tức từ đơn hàng ---------------------------------------------------------------
+//
+// Mỗi đơn khi paid đã trích sẵn 15% (dividend_pool_vnd) làm Pool Cổ Đông trong sales_distributions
+// (xem splitOrder). SweepDividend GOM khoản đó của mọi đơn paid CHƯA swept, chia HẾT cho cổ đông
+// theo tầng 9%+6% (PlanTieredFromPool), rồi đánh dấu swept=true. Bất biến & an toàn:
+//   - Idempotent: cột swept + khoá FOR UPDATE ⇒ một đơn KHÔNG bao giờ chia cổ tức hai lần.
+//   - Σ payouts == pool (rollover) ⇒ không thất thoát/đẻ đồng nào.
+//   - Là dividend THỰC (dividend_payouts UNPAID) — giữ posture "biến thiên theo doanh thu thật,
+//     admin chủ động bấm quét, không cron, không cam kết".
+
+// ErrNothingToSweep: không có đơn paid nào chưa gộp — không tạo đợt cổ tức rỗng.
+var ErrNothingToSweep = errors.New("không có đơn thành công nào chưa gộp cổ tức")
+
+// SweepResult là kết quả một lần quét.
+type SweepResult struct {
+	SweptOrders  int                    `json:"swept_orders"`
+	RevenueVnd   int64                  `json:"revenue_vnd"` // Σ subtotal các đơn được quét
+	PoolVnd      int64                  `json:"pool_vnd"`    // Σ 15% pool cổ đông đã trích
+	Distribution db.RevenueDistribution `json:"distribution"`
+	Dividend     db.Dividend            `json:"dividend"`
+	Plan         TieredPlan             `json:"plan"`
+	Payouts      []db.DividendPayout    `json:"payouts"`
+}
+
+// SweepPreview đọc (KHÔNG khoá, KHÔNG ghi) số sẽ quét + kế hoạch chia, cho admin xem trước.
+func (s *DistributionService) SweepPreview(ctx context.Context) (SweepResult, error) {
+	sum, err := s.store.SumUnsweptPaidPool(ctx)
+	if err != nil {
+		return SweepResult{}, err
+	}
+	out := SweepResult{SweptOrders: int(sum.Orders), RevenueVnd: sum.Revenue, PoolVnd: sum.Pool}
+	if sum.Pool <= 0 {
+		return out, nil
+	}
+	accounts, err := s.store.ListActiveAccounts(ctx)
+	if err != nil {
+		return SweepResult{}, err
+	}
+	out.Plan = PlanTieredFromPool("(preview)", sum.Revenue, sum.Pool, accounts, s.tieredConfig(ctx))
+	return out, nil
+}
+
+// ErrNoActiveShareholders: có pool nhưng chưa có cổ đông active để chia. Luồng tự động (PayOrder)
+// coi đây là "để đơn unswept, chia sau" — KHÔNG huỷ thanh toán.
+var ErrNoActiveShareholders = errors.New("chưa có cổ đông active để chia cổ tức")
+
+// SweepDividend (admin bấm) gom pool 15% của mọi đơn paid chưa swept thành MỘT đợt cổ tức thực,
+// trong 1 giao dịch. Lần chạy đầu tự cuốn cả đơn CŨ (backfill). Rỗng ⇒ ErrNothingToSweep.
+func (s *DistributionService) SweepDividend(ctx context.Context, admin uuid.UUID) (SweepResult, error) {
+	cfg := s.tieredConfig(ctx)
+	var out SweepResult
+	err := s.store.ExecTx(ctx, func(q *db.Queries) error {
+		res, e := sweepUnsweptTx(ctx, q, admin, cfg, false)
+		if e != nil {
+			return e
+		}
+		out = res
+		return nil
+	})
+	if err != nil {
+		return SweepResult{}, err
+	}
+	return out, nil
+}
+
+// sweepUnsweptTx là LÕI quét cổ tức, chạy TRONG một tx cho sẵn (q). Gom pool 15% của mọi đơn paid
+// chưa swept → 1 đợt cổ tức tiered, đánh dấu swept. autoPay=true ⇒ set paid_at ngay (tiền vào thẳng
+// ví cổ đông, không cần admin duyệt) — dùng cho luồng tự động trong PayOrder.
+//
+// Bất biến giữ nguyên: Σ payouts == pool (rollover); idempotent qua swept + FOR UPDATE. Trả
+// ErrNothingToSweep nếu không có đơn/pool; ErrNoActiveShareholders nếu có pool nhưng chưa cổ đông.
+func sweepUnsweptTx(ctx context.Context, q *db.Queries, admin uuid.UUID, cfg tieredConfig, autoPay bool) (SweepResult, error) {
+	rows, err := q.ListUnsweptPaidDistributions(ctx) // khoá FOR UPDATE
+	if err != nil {
+		return SweepResult{}, err
+	}
+	if len(rows) == 0 {
+		return SweepResult{}, ErrNothingToSweep
+	}
+	var revenue, pool int64
+	for _, d := range rows {
+		revenue += d.TotalVnd
+		pool += d.DividendPoolVnd
+	}
+	if pool <= 0 {
+		return SweepResult{}, ErrNothingToSweep
+	}
+
+	accounts, err := q.ListActiveAccounts(ctx)
+	if err != nil {
+		return SweepResult{}, err
+	}
+	period := "QCT-" + time.Now().Format("20060102-150405")
+	plan := PlanTieredFromPool(period, revenue, pool, accounts, cfg)
+	if plan.Distributed <= 0 {
+		return SweepResult{}, ErrNoActiveShareholders
+	}
+
+	mode := "Quét cổ tức"
+	action := "dividend.sweep"
+	if autoPay {
+		mode = "Tự động chia cổ tức"
+		action = "dividend.auto"
+	}
+	div, err := q.CreateDividend(ctx, db.CreateDividendParams{
+		DeclaredBy:  admin,
+		Period:      period,
+		TotalAmount: plan.Distributed,
+		Note:        pgText(fmt.Sprintf("%s %d đơn — pool cổ đông %d₫ (đồng chia %s + bonus %s)", mode, len(rows), pool, pctStr(cfg.EqualRate), pctStr(cfg.BonusRate))),
+	})
+	if err != nil {
+		return SweepResult{}, err
+	}
+
+	var payouts []db.DividendPayout
+	for _, p := range plan.Payouts {
+		if p.Amount <= 0 {
+			continue
+		}
+		po, err := q.CreateDividendPayout(ctx, db.CreateDividendPayoutParams{
+			DividendID: div.ID, UserID: p.UserID, Shares: p.Shares, Amount: p.Amount,
+			EqualShare: p.EqualShare, Bonus: p.Bonus, Band: p.BandLabel,
+			BandRate: p.BandRate, InvestedVnd: p.InvestedVnd,
+		})
+		if err != nil {
+			return SweepResult{}, err
+		}
+		if autoPay {
+			if _, err := q.MarkPayoutPaid(ctx, po.ID); err != nil {
+				return SweepResult{}, err
+			}
+		}
+		payouts = append(payouts, po)
+	}
+
+	rec, err := q.CreateRevenueDistribution(ctx, db.CreateRevenueDistributionParams{
+		Period:            period,
+		TotalRevenue:      revenue,
+		PoolRate:          cfg.EqualRate + cfg.BonusRate,
+		InvestorShareRate: 1,
+		InvestorPool:      plan.Distributed,
+		DividendID:        uuid.NullUUID{UUID: div.ID, Valid: true},
+		CreatedBy:         admin,
+	})
+	if err != nil {
+		return SweepResult{}, err
+	}
+
+	// Đánh dấu swept — chốt idempotent. Mỗi đơn phải đổi đúng 1 dòng (đã khoá ở trên).
+	for _, d := range rows {
+		n, err := q.MarkSalesDistributionSwept(ctx, d.OrderID)
+		if err != nil {
+			return SweepResult{}, err
+		}
+		if n != 1 {
+			return SweepResult{}, fmt.Errorf("đơn %s không đánh dấu swept được (đã swept?) — huỷ giao dịch", d.OrderID)
+		}
+	}
+
+	out := SweepResult{
+		SweptOrders: len(rows), RevenueVnd: revenue, PoolVnd: pool,
+		Distribution: rec, Dividend: div, Plan: plan, Payouts: payouts,
+	}
+	if err := audit.Write(ctx, q, audit.Actor(admin), action, "dividends", div.ID.String(), nil, out); err != nil {
+		return SweepResult{}, err
+	}
+	return out, nil
+}

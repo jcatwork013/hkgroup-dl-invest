@@ -2,20 +2,56 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/hkgroup/backend/internal/db"
+	"github.com/hkgroup/backend/internal/platform/security"
 	"github.com/hkgroup/backend/internal/store"
 )
 
 type ProfileService struct {
-	store *store.Store
+	store   *store.Store
+	cryptor *security.Cryptor
 }
 
-func NewProfileService(s *store.Store) *ProfileService { return &ProfileService{store: s} }
+func NewProfileService(s *store.Store, cryptor *security.Cryptor) *ProfileService {
+	return &ProfileService{store: s, cryptor: cryptor}
+}
+
+// Thông tin ngân hàng (số TK, chủ TK) là PII → mã hoá at-rest với tiền tố "enc:".
+// Giá trị cũ (plaintext, chưa tiền tố) vẫn đọc được → không vỡ dữ liệu hiện có.
+const encPrefix = "enc:"
+
+func (s *ProfileService) enc(v string) string {
+	if v == "" || s.cryptor == nil {
+		return v
+	}
+	ct, err := s.cryptor.Encrypt([]byte(v))
+	if err != nil {
+		return v
+	}
+	return encPrefix + base64.StdEncoding.EncodeToString(ct)
+}
+
+func (s *ProfileService) dec(v string) string {
+	if s.cryptor == nil || !strings.HasPrefix(v, encPrefix) {
+		return v // plaintext cũ
+	}
+	ct, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(v, encPrefix))
+	if err != nil {
+		return v
+	}
+	pt, err := s.cryptor.Decrypt(ct)
+	if err != nil {
+		return v
+	}
+	return string(pt)
+}
 
 // ProfileInput carries the editable investor profile fields.
 type ProfileInput struct {
@@ -40,7 +76,13 @@ func (s *ProfileService) Get(ctx context.Context, userID uuid.UUID) (db.Investor
 	if errors.Is(err, pgx.ErrNoRows) {
 		return db.InvestorProfile{UserID: userID, Nationality: "Việt Nam"}, nil
 	}
-	return p, err
+	if err != nil {
+		return p, err
+	}
+	// Giải mã PII ngân hàng trước khi trả cho chủ tài khoản / admin.
+	p.BankAccountNumber = s.dec(p.BankAccountNumber)
+	p.BankAccountName = s.dec(p.BankAccountName)
+	return p, nil
 }
 
 func (s *ProfileService) Upsert(ctx context.Context, userID uuid.UUID, in ProfileInput) (db.InvestorProfile, error) {
@@ -48,7 +90,7 @@ func (s *ProfileService) Upsert(ctx context.Context, userID uuid.UUID, in Profil
 	if nat == "" {
 		nat = "Việt Nam"
 	}
-	return s.store.UpsertProfile(ctx, db.UpsertProfileParams{
+	p, err := s.store.UpsertProfile(ctx, db.UpsertProfileParams{
 		UserID:            userID,
 		DateOfBirth:       in.DateOfBirth,
 		Gender:            in.Gender,
@@ -61,7 +103,14 @@ func (s *ProfileService) Upsert(ctx context.Context, userID uuid.UUID, in Profil
 		Occupation:        in.Occupation,
 		TaxCode:           in.TaxCode,
 		BankName:          in.BankName,
-		BankAccountNumber: in.BankAccountNumber,
-		BankAccountName:   in.BankAccountName,
+		BankAccountNumber: s.enc(in.BankAccountNumber),
+		BankAccountName:   s.enc(in.BankAccountName),
 	})
+	if err != nil {
+		return p, err
+	}
+	// Trả lại giá trị đã giải mã (không lộ ciphertext ra response).
+	p.BankAccountNumber = in.BankAccountNumber
+	p.BankAccountName = in.BankAccountName
+	return p, nil
 }

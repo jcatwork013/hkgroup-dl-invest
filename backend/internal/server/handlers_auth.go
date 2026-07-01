@@ -50,6 +50,32 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"user": toPublicUser(user), "tokens": tokens})
 }
 
+// handleRegisterCustomer: đăng ký KHÁCH HÀNG từ website. Role = customer (chưa phải CTV).
+func (s *Server) handleRegisterCustomer(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		FullName string `json:"full_name"`
+		Phone    string `json:"phone"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+		RefCode  string `json:"ref_code"` // mã giới thiệu từ ?ref= (tuỳ chọn) → ăn ref
+	}
+	if err := decode(r, &in); err != nil {
+		writeError(w, err)
+		return
+	}
+	user, tokens, err := s.identity.RegisterCustomer(r.Context(), service.RegisterInput{
+		FullName: in.FullName, Phone: in.Phone, Email: in.Email, Password: in.Password,
+		ReferralCode: in.RefCode,
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"user": toPublicUser(user), "tokens": tokens, "affiliate_status": "none",
+	})
+}
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Email    string `json:"email"`
@@ -64,7 +90,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"user": toPublicUser(user), "tokens": tokens})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user": toPublicUser(user), "tokens": tokens,
+		"affiliate_status": s.affiliate.Status(r.Context(), user),
+	})
 }
 
 // POST /api/v1/me/password — authenticated user (investor or admin) changes their own password.

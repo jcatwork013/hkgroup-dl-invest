@@ -46,16 +46,6 @@ function fmtConfig(v: string | undefined, fmt: ConfigRow["fmt"]): string {
   return v;
 }
 
-const SALES_CONFIG: ConfigRow[] = [
-  { key: "sales_seller_rate", label: "Người bán (mỗi đơn)", fmt: "pct" },
-  { key: "sales_affiliate_rate", label: "Affiliate giới thiệu", fmt: "pct" },
-  { key: "sales_equalshare_rate", label: "Đồng chia", fmt: "pct" },
-  { key: "sales_pool_rate", label: "Pool cổ đông", fmt: "pct" },
-  { key: "sales_cost_rate", label: "Giá vốn sản phẩm", fmt: "pct" },
-  { key: "sales_operations_rate", label: "Vận hành & phát triển", fmt: "pct" },
-  { key: "sales_equalshare_min", label: "Ngưỡng đồng chia (đơn ≥)", fmt: "vnd" },
-];
-
 function ConfigGrid({ rows, data }: { rows: ConfigRow[]; data: Record<string, string> }) {
   return (
     <div className="grid gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
@@ -83,7 +73,40 @@ const COMPANY: Field[] = [
   { key: "company_account_name", label: "Chủ tài khoản (tên công ty)", placeholder: "CONG TY CO PHAN DUOC LIEU HK" },
 ];
 
-const ALL = [...CONTACT, ...COMPANY];
+// Thương hiệu & nội dung hiển thị trên web bán hàng duoclieuhk.vn (shop đọc public).
+const BRAND: Field[] = [
+  { key: "brand_name", label: "Tên thương hiệu", placeholder: "HKGROUP" },
+  { key: "brand_tagline", label: "Slogan (tagline)", placeholder: "Dược liệu lên men" },
+  { key: "hero_subtitle", label: "Mô tả trang chủ (hero)", placeholder: "Công thức cổ truyền kết hợp công nghệ lên men hiện đại..." },
+  { key: "footer_about", label: "Giới thiệu (footer)", placeholder: "Dược liệu lên men theo công thức cổ truyền..." },
+  { key: "seo_title", label: "SEO — Tiêu đề", placeholder: "HKGROUP — Dược liệu lên men..." },
+  { key: "seo_description", label: "SEO — Mô tả", placeholder: "Mô tả ngắn cho công cụ tìm kiếm" },
+  { key: "seo_keywords", label: "SEO — Từ khoá", placeholder: "dược liệu, lên men, thảo dược" },
+  { key: "social_facebook", label: "Facebook URL", placeholder: "https://facebook.com/..." },
+  { key: "social_youtube", label: "YouTube URL", placeholder: "https://youtube.com/@..." },
+  { key: "social_zalo", label: "Zalo URL", placeholder: "https://zalo.me/..." },
+];
+
+const ALL = [...CONTACT, ...COMPANY, ...BRAND];
+
+// Cơ chế hoa hồng bán hàng — lưu dạng thập phân (0.25), nhập/hiển thị dạng % (25).
+const SALES_RATE_FIELDS: { key: string; label: string }[] = [
+  { key: "sales_seller_rate", label: "Người bán / đơn" },
+  { key: "sales_affiliate_rate", label: "Affiliate giới thiệu" },
+  { key: "sales_equalshare_rate", label: "Đồng chia" },
+  { key: "sales_pool_rate", label: "Pool cổ đông" },
+  { key: "sales_cost_rate", label: "Giá vốn sản phẩm" },
+  { key: "sales_operations_rate", label: "Vận hành & phát triển" },
+];
+const SALES_RATE_KEYS = SALES_RATE_FIELDS.map((f) => f.key);
+const pctOf = (dec: string | undefined) => {
+  const n = parseFloat(dec ?? "");
+  return Number.isFinite(n) ? String(Math.round(n * 1000) / 10) : "";
+};
+const decOf = (pct: string) => {
+  const n = parseFloat(pct);
+  return Number.isFinite(n) ? String(Math.round(n * 100) / 10000) : "0";
+};
 
 // Chuẩn hoá CSV ngày rút -> mảng ngày hợp lệ (1..31, unique, sorted). Rỗng -> mặc định 15,30.
 function parseDays(s: string | undefined): number[] {
@@ -106,6 +129,7 @@ function SettingsInner() {
   const [form, setForm] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [logoUploading, setLogoUploading] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ["admin-settings"],
@@ -132,6 +156,12 @@ function SettingsInner() {
     setError(null);
     const body: Record<string, string> = {};
     ALL.forEach((f) => (body[f.key] = form[f.key] ?? ""));
+    // Logo (URL ảnh công khai) — upload hoặc dán URL.
+    body["brand_logo_url"] = form["brand_logo_url"] ?? "";
+    // Cơ chế hoa hồng bán hàng (thập phân) + ngưỡng + KPI.
+    SALES_RATE_KEYS.forEach((k) => (body[k] = form[k] ?? ""));
+    body["sales_equalshare_min"] = form["sales_equalshare_min"] ?? "";
+    body["sales_kpi_monthly_target"] = form["sales_kpi_monthly_target"] ?? "";
     // Lịch rút tiền: lưu dạng CSV đã chuẩn hoá (vd "15,30").
     body["withdrawal_days"] = parseDays(form["withdrawal_days"]).join(",");
     // Cấu hình Resend (đặt lại mật khẩu). API key là write-only: chỉ gửi khi admin
@@ -146,6 +176,22 @@ function SettingsInner() {
   }
 
   const set = (k: string, v: string) => setForm((s) => ({ ...s, [k]: v }));
+
+  async function onLogoFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setError(null);
+    setLogoUploading(true);
+    try {
+      const res = await adminApi.uploadProductImage(file); // trả { id, url } (ảnh công khai)
+      set("brand_logo_url", res.url);
+    } catch (err) {
+      setError((err as ApiException).message);
+    } finally {
+      setLogoUploading(false);
+      e.target.value = "";
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -179,12 +225,8 @@ function SettingsInner() {
               <p className="text-xs uppercase tracking-wide text-cream/45">Pool &amp; phân bổ doanh thu</p>
               <ConfigGrid rows={DIST_CONFIG} data={data} />
             </div>
-            <div className="space-y-3">
-              <p className="text-xs uppercase tracking-wide text-cream/45">Chia dòng tiền bán hàng (mỗi đơn)</p>
-              <ConfigGrid rows={SALES_CONFIG} data={data} />
-            </div>
             <p className="text-xs text-cream/40">
-              Đây là các thông số đang áp dụng. Để thay đổi tỷ lệ hoa hồng/phân bổ cần chỉnh ở cơ sở dữ liệu — màn này chỉ hiển thị để kiểm soát.
+              Đây là các thông số đầu tư đang áp dụng (chỉ xem). Cơ chế hoa hồng BÁN HÀNG chỉnh ở khối bên dưới.
             </p>
           </div>
         )}
@@ -194,22 +236,133 @@ function SettingsInner() {
         <Spinner />
       ) : (
         <form onSubmit={handleSave} className="space-y-6">
-          <Card className="max-w-xl space-y-4">
+          <div className="grid items-start gap-6 lg:grid-cols-2">
+          <Card className="space-y-4">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-gold-300">
               Thông tin liên hệ
             </h2>
-            {CONTACT.map((f) => (
-              <Input
-                key={f.key}
-                label={f.label}
-                placeholder={f.placeholder}
-                value={form[f.key] ?? ""}
-                onChange={(e) => set(f.key, e.target.value)}
-              />
-            ))}
+            <div className="grid gap-4 sm:grid-cols-2">
+              {CONTACT.map((f) => (
+                <Input
+                  key={f.key}
+                  label={f.label}
+                  placeholder={f.placeholder}
+                  value={form[f.key] ?? ""}
+                  onChange={(e) => set(f.key, e.target.value)}
+                />
+              ))}
+            </div>
           </Card>
 
-          <Card className="max-w-xl space-y-4">
+          {/* Thương hiệu & nội dung web bán hàng duoclieuhk.vn */}
+          <Card className="space-y-4">
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-gold-300">
+                Thương hiệu &amp; nội dung web bán hàng
+              </h2>
+              <p className="mt-1 text-xs leading-relaxed text-cream/50">
+                Logo, tên thương hiệu, SEO &amp; nội dung hiển thị trên{" "}
+                <strong className="text-cream/80">duoclieuhk.vn</strong>. Lưu xong đồng bộ sang web bán hàng (tối đa ~1 phút).
+              </p>
+            </div>
+
+            {/* Logo */}
+            <div>
+              <label className="mb-1.5 block text-xs font-medium text-cream/70">Logo thương hiệu</label>
+              <div className="flex items-center gap-3">
+                <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-lg bg-white/90 ring-1 ring-white/10">
+                  {form["brand_logo_url"] ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={form["brand_logo_url"]} alt="logo" className="h-full w-full object-contain" />
+                  ) : (
+                    <span className="text-xs text-ink/40">Chưa có</span>
+                  )}
+                </div>
+                <div className="space-y-1">
+                  <label className="inline-flex cursor-pointer items-center rounded-lg border border-white/15 px-3 py-1.5 text-xs text-cream/80 hover:bg-white/5">
+                    {logoUploading ? "Đang tải..." : "Tải logo lên"}
+                    <input type="file" accept="image/*" className="hidden" onChange={onLogoFile} disabled={logoUploading} />
+                  </label>
+                  {form["brand_logo_url"] && (
+                    <button type="button" onClick={() => set("brand_logo_url", "")} className="block text-xs text-red-300 hover:underline">
+                      Gỡ logo
+                    </button>
+                  )}
+                </div>
+              </div>
+              <Input
+                label="hoặc dán URL logo"
+                placeholder="/api/v1/public/images/... hoặc https://..."
+                value={form["brand_logo_url"] ?? ""}
+                onChange={(e) => set("brand_logo_url", e.target.value)}
+              />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              {BRAND.map((f) => (
+                <Input
+                  key={f.key}
+                  label={f.label}
+                  placeholder={f.placeholder}
+                  value={form[f.key] ?? ""}
+                  onChange={(e) => set(f.key, e.target.value)}
+                />
+              ))}
+            </div>
+          </Card>
+
+          {/* Cơ chế hoa hồng bán hàng (mỗi đơn) — admin cấu hình % + KPI */}
+          <Card className="space-y-4">
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-gold-300">
+                Cơ chế hoa hồng bán hàng (mỗi đơn)
+              </h2>
+              <p className="mt-1 text-xs leading-relaxed text-cream/50">
+                Chia doanh số mỗi đơn hoàn tất. Tổng các mục{" "}
+                <strong className="text-cream/80">nên = 100%</strong>. Áp dụng cho hoa hồng người bán &amp; affiliate.
+              </p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              {SALES_RATE_FIELDS.map((f) => (
+                <label key={f.key} className="block">
+                  <span className="mb-1.5 block text-xs font-medium text-cream/70">{f.label} (%)</span>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    max="100"
+                    value={pctOf(form[f.key])}
+                    onChange={(e) => set(f.key, decOf(e.target.value))}
+                    className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm text-cream focus:border-gold-500 focus:outline-none"
+                  />
+                </label>
+              ))}
+            </div>
+            {(() => {
+              const total = SALES_RATE_KEYS.reduce((a, k) => a + (parseFloat(pctOf(form[k])) || 0), 0);
+              const ok = Math.round(total * 10) / 10 === 100;
+              return (
+                <p className={`text-xs font-medium ${ok ? "text-green-300" : "text-gold-300"}`}>
+                  Tổng chia: {Math.round(total * 10) / 10}% {ok ? "✓" : "(nên = 100%)"}
+                </p>
+              );
+            })()}
+            <Input
+              label="Ngưỡng đồng chia — chỉ chia 'đồng chia' khi đơn ≥ (VNĐ)"
+              type="number"
+              value={form["sales_equalshare_min"] ?? ""}
+              onChange={(e) => set("sales_equalshare_min", e.target.value)}
+            />
+            <Input
+              label="KPI doanh số / tháng cho CTV (VNĐ)"
+              type="number"
+              placeholder="vd 50000000"
+              value={form["sales_kpi_monthly_target"] ?? ""}
+              onChange={(e) => set("sales_kpi_monthly_target", e.target.value)}
+            />
+          </Card>
+
+          <Card className="space-y-4">
             <div>
               <h2 className="text-sm font-semibold uppercase tracking-wide text-gold-300">
                 Tài khoản công ty nhận góp vốn
@@ -222,18 +375,20 @@ function SettingsInner() {
                 sinh QR chuyển khoản tự động.
               </p>
             </div>
-            {COMPANY.map((f) => (
-              <Input
-                key={f.key}
-                label={f.label}
-                placeholder={f.placeholder}
-                value={form[f.key] ?? ""}
-                onChange={(e) => set(f.key, e.target.value)}
-              />
-            ))}
+            <div className="grid gap-4 sm:grid-cols-2">
+              {COMPANY.map((f) => (
+                <Input
+                  key={f.key}
+                  label={f.label}
+                  placeholder={f.placeholder}
+                  value={form[f.key] ?? ""}
+                  onChange={(e) => set(f.key, e.target.value)}
+                />
+              ))}
+            </div>
           </Card>
 
-          <Card className="max-w-xl space-y-4">
+          <Card className="space-y-4">
             <div>
               <h2 className="text-sm font-semibold uppercase tracking-wide text-gold-300">
                 Lịch rút tiền (ví hoa hồng)
@@ -257,7 +412,7 @@ function SettingsInner() {
             </p>
           </Card>
 
-          <Card className="max-w-xl space-y-4">
+          <Card className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-gold-300">
                 Gửi email — Resend (đặt lại mật khẩu)
@@ -309,6 +464,8 @@ function SettingsInner() {
               khi lưu sẽ giữ nguyên key đã cấu hình.
             </p>
           </Card>
+
+          </div>
 
           <div className="flex items-center gap-3">
             <Button type="submit" disabled={save.isPending}>

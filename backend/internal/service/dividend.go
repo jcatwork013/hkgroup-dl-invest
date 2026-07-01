@@ -81,6 +81,29 @@ func (s *DividendService) Declare(ctx context.Context, admin uuid.UUID, period s
 	return div, payouts, err
 }
 
+// PayAll chi trả TẤT CẢ payout chưa trả của 1 đợt cổ tức trong MỘT transaction. Admin duyệt 1 lần,
+// hệ thống tự tính sẵn & cộng vào ví cổ tức của từng cổ đông — không bấm từng người, tránh sai số.
+func (s *DividendService) PayAll(ctx context.Context, admin, dividendID uuid.UUID) (int, error) {
+	paid := 0
+	err := s.store.ExecTx(ctx, func(q *db.Queries) error {
+		rows, e := q.ListPayoutsByDividend(ctx, dividendID)
+		if e != nil {
+			return e
+		}
+		for _, r := range rows {
+			if r.PaidAt.Valid {
+				continue // đã trả rồi → bỏ qua (idempotent)
+			}
+			if _, e := q.MarkPayoutPaid(ctx, r.ID); e != nil {
+				return e
+			}
+			paid++
+		}
+		return audit.Write(ctx, q, audit.Actor(admin), "dividend.pay_all", "dividends", dividendID.String(), nil, map[string]int{"paid": paid})
+	})
+	return paid, err
+}
+
 func (s *DividendService) MarkPaid(ctx context.Context, admin, payoutID uuid.UUID) (db.DividendPayout, error) {
 	var p db.DividendPayout
 	err := s.store.ExecTx(ctx, func(q *db.Queries) error {

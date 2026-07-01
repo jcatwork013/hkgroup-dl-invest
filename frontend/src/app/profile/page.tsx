@@ -110,6 +110,7 @@ function ProfileInner() {
         <Spinner />
       ) : (
         <form onSubmit={handleSave} className="space-y-6">
+          <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
           <Section title="Thông tin cá nhân">
             <Input label="Ngày sinh" placeholder="dd/mm/yyyy" inputMode="numeric" value={form.date_of_birth} onChange={(e) => set("date_of_birth", e.target.value)} />
             <label className="block">
@@ -146,6 +147,7 @@ function ProfileInner() {
             <Input label="Số tài khoản" value={form.bank_account_number} onChange={(e) => set("bank_account_number", e.target.value)} />
             <Input label="Chủ tài khoản" value={form.bank_account_name} onChange={(e) => set("bank_account_name", e.target.value)} />
           </Section>
+          </div>
 
           <div className="flex items-center gap-3">
             <Button type="submit" disabled={save.isPending}>

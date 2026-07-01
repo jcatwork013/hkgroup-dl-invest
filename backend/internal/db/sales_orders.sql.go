@@ -149,6 +149,28 @@ func (q *Queries) ListSalesOrdersBySeller(ctx context.Context, sellerID uuid.UUI
 	return items, rows.Err()
 }
 
+const listSalesOrdersByPhone = `-- name: ListSalesOrdersByPhone :many
+SELECT ` + salesOrderCols + ` FROM sales_orders WHERE customer_phone = $1 ORDER BY created_at DESC
+`
+
+// ListSalesOrdersByPhone — đơn của 1 khách theo SĐT (dùng cho lịch sử đơn của khách đang đăng nhập).
+func (q *Queries) ListSalesOrdersByPhone(ctx context.Context, customerPhone string) ([]SalesOrder, error) {
+	rows, err := q.db.Query(ctx, listSalesOrdersByPhone, customerPhone)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SalesOrder{}
+	for rows.Next() {
+		i, err := scanSalesOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
 // ---- order items ----
 
 const createSalesOrderItem = `-- name: CreateSalesOrderItem :one
@@ -238,6 +260,80 @@ func (q *Queries) GetSalesDistribution(ctx context.Context, orderID uuid.UUID) (
 	err := row.Scan(&i.OrderID, &i.TotalVnd, &i.SellerVnd, &i.AffiliateVnd, &i.EqualShareVnd,
 		&i.PoolVnd, &i.CostVnd, &i.OperationsVnd, &i.DividendPoolVnd, &i.Swept, &i.CreatedAt)
 	return i, err
+}
+
+// ---- dividend sweep (đơn paid chưa gộp cổ tức) ----
+
+// UnsweptDistributionRow là phần tối thiểu để quét cổ tức: khoản pool cổ đông (15%) đã trích sẵn
+// mỗi đơn cùng doanh thu gốc, cho các đơn ĐÃ paid mà CHƯA swept.
+type UnsweptDistributionRow struct {
+	OrderID         uuid.UUID `json:"order_id"`
+	TotalVnd        int64     `json:"total_vnd"`
+	DividendPoolVnd int64     `json:"dividend_pool_vnd"`
+}
+
+const listUnsweptPaidDistributions = `-- name: ListUnsweptPaidDistributions :many
+SELECT sd.order_id, sd.total_vnd, sd.dividend_pool_vnd
+FROM sales_distributions sd
+JOIN sales_orders so ON so.id = sd.order_id
+WHERE sd.swept = false AND so.status = 'paid'
+ORDER BY sd.created_at
+FOR UPDATE OF sd
+`
+
+// ListUnsweptPaidDistributions khoá (FOR UPDATE) các dòng phân bổ chưa gộp của đơn paid — nền tảng
+// idempotent của Sweep: hai lần quét đồng thời, lần sau chờ khoá rồi thấy rỗng (đã swept).
+func (q *Queries) ListUnsweptPaidDistributions(ctx context.Context) ([]UnsweptDistributionRow, error) {
+	rows, err := q.db.Query(ctx, listUnsweptPaidDistributions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []UnsweptDistributionRow{}
+	for rows.Next() {
+		var i UnsweptDistributionRow
+		if err := rows.Scan(&i.OrderID, &i.TotalVnd, &i.DividendPoolVnd); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
+const sumUnsweptPaidPool = `-- name: SumUnsweptPaidPool :one
+SELECT COUNT(*)::bigint AS orders,
+       COALESCE(SUM(sd.total_vnd), 0)::bigint AS revenue,
+       COALESCE(SUM(sd.dividend_pool_vnd), 0)::bigint AS pool
+FROM sales_distributions sd
+JOIN sales_orders so ON so.id = sd.order_id
+WHERE sd.swept = false AND so.status = 'paid'
+`
+
+// SumUnsweptPaidPoolRow tổng hợp KHÔNG khoá — để preview số sẽ quét mà không đụng ghi.
+type SumUnsweptPaidPoolRow struct {
+	Orders  int64 `json:"orders"`
+	Revenue int64 `json:"revenue"`
+	Pool    int64 `json:"pool"`
+}
+
+func (q *Queries) SumUnsweptPaidPool(ctx context.Context) (SumUnsweptPaidPoolRow, error) {
+	row := q.db.QueryRow(ctx, sumUnsweptPaidPool)
+	var i SumUnsweptPaidPoolRow
+	err := row.Scan(&i.Orders, &i.Revenue, &i.Pool)
+	return i, err
+}
+
+const markSalesDistributionSwept = `-- name: MarkSalesDistributionSwept :execrows
+UPDATE sales_distributions SET swept = true WHERE order_id = $1 AND swept = false
+`
+
+// MarkSalesDistributionSwept đánh dấu 1 đơn đã gộp cổ tức. Trả số dòng đổi (0 nếu đã swept trước đó).
+func (q *Queries) MarkSalesDistributionSwept(ctx context.Context, orderID uuid.UUID) (int64, error) {
+	tag, err := q.db.Exec(ctx, markSalesDistributionSwept, orderID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // ---- sales commissions ----
@@ -390,4 +486,12 @@ func (q *Queries) ListSalers(ctx context.Context) ([]ListSalersRow, error) {
 		items = append(items, i)
 	}
 	return items, rows.Err()
+}
+
+const deleteSalesOrder = `DELETE FROM sales_orders WHERE id = $1`
+
+// DeleteSalesOrder xoá đơn (CASCADE items/distributions/commissions theo FK).
+func (q *Queries) DeleteSalesOrder(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteSalesOrder, id)
+	return err
 }

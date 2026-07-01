@@ -86,15 +86,16 @@ func run(log *slog.Logger) error {
 	dividendSvc.SetEvents(publisher)
 	dashboardSvc := service.NewDashboardService(st)
 	settingsSvc := service.NewSettingsService(st)
-	profileSvc := service.NewProfileService(st)
-	distributionSvc := service.NewDistributionService(st, dividendSvc, settingsSvc)
-	walletSvc := service.NewWalletService(st, settingsSvc)
-	salesSvc := service.NewSalesService(st, settingsSvc)
-	passwordResetSvc := service.NewPasswordResetService(st, settingsSvc)
 	cryptor, err := security.NewCryptor(cfg.KYCEncKey)
 	if err != nil {
 		return err
 	}
+	profileSvc := service.NewProfileService(st, cryptor)
+	distributionSvc := service.NewDistributionService(st, dividendSvc, settingsSvc)
+	walletSvc := service.NewWalletService(st, settingsSvc)
+	salesSvc := service.NewSalesService(st, settingsSvc)
+	passwordResetSvc := service.NewPasswordResetService(st, settingsSvc)
+	affiliateSvc := service.NewAffiliateService(st, identitySvc)
 	uploadSvc, err := service.NewUploadService(st, cryptor, cfg.UploadDir)
 	if err != nil {
 		return err
@@ -121,6 +122,7 @@ func run(log *slog.Logger) error {
 		Upload:        uploadSvc,
 		Sales:         salesSvc,
 		PasswordReset: passwordResetSvc,
+		Affiliate:     affiliateSvc,
 		CORSOrigin:    cfg.CORSOrigin,
 	})
 

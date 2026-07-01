@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Guard from "@/components/Guard";
+import { Modal } from "@/components/Modal";
 import { adminApi } from "@/lib/endpoints";
 import { ApiException } from "@/lib/api";
 import { formatDate, formatVnd } from "@/lib/format";
@@ -44,7 +45,24 @@ function UsersInner() {
     enabled: !!detail,
   });
 
-  const refresh = () => qc.invalidateQueries({ queryKey: ["admin-users"] });
+  const { data: lockedData } = useQuery({ queryKey: ["locked-users"], queryFn: adminApi.lockedUsers });
+  const lockedSet = new Set(lockedData?.locked ?? []);
+
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["admin-users"] });
+    qc.invalidateQueries({ queryKey: ["locked-users"] });
+  };
+
+  const setRole = useMutation({
+    mutationFn: (v: { id: string; role: string }) => adminApi.setUserRole(v.id, v.role),
+    onSuccess: refresh,
+    onError: (e) => setError((e as ApiException).message),
+  });
+  const lockM = useMutation({
+    mutationFn: (v: { id: string; lock: boolean }) => (v.lock ? adminApi.lockUser(v.id) : adminApi.unlockUser(v.id)),
+    onSuccess: refresh,
+    onError: (e) => setError((e as ApiException).message),
+  });
 
   const create = useMutation({
     mutationFn: () => adminApi.createUser(form),
@@ -78,12 +96,16 @@ function UsersInner() {
 
   const reset = useMutation({
     mutationFn: (id: string) => adminApi.resetUserPassword(id),
-    onSuccess: () => window.alert("Đã gửi email chứa link đặt lại mật khẩu cho người dùng."),
+    onSuccess: (res) =>
+      window.prompt(
+        "Đã đặt mật khẩu MỚI. Sao chép và gửi cho người dùng (họ nên đổi lại sau khi đăng nhập):",
+        res.password
+      ),
     onError: (e) => setError((e as ApiException).message),
   });
 
   function handleReset(u: AdminUser) {
-    if (!window.confirm(`Gửi email đặt lại mật khẩu tới "${u.full_name}" (${u.email})?`)) return;
+    if (!window.confirm(`Đặt mật khẩu MỚI trực tiếp cho "${u.full_name}" (${u.email})? Mật khẩu cũ sẽ mất hiệu lực ngay.`)) return;
     setError(null);
     reset.mutate(u.id);
   }
@@ -160,13 +182,27 @@ function UsersInner() {
               </thead>
               <tbody>
                 {users?.map((u) => (
-                  <tr key={u.id}>
-                    <td className="font-medium text-cream">{u.full_name}</td>
+                  <tr key={u.id} className={lockedSet.has(u.id) ? "opacity-60" : ""}>
+                    <td className="font-medium text-cream">
+                      {u.full_name}
+                      {lockedSet.has(u.id) && <Badge tone="red">Đã khoá</Badge>}
+                    </td>
                     <td>
                       {u.email}
                       <span className="block text-xs text-cream/45">{u.phone}</span>
                     </td>
-                    <td><Badge tone={u.role === "admin" ? "yellow" : u.role === "saler" ? "blue" : "slate"}>{u.role === "admin" ? "Quản trị viên" : u.role === "saler" ? "Nhân viên bán hàng" : "Nhà đầu tư"}</Badge></td>
+                    <td>
+                      <select
+                        value={u.role}
+                        onChange={(e) => window.confirm(`Đổi vai trò "${u.full_name}" → ${e.target.value}?`) && setRole.mutate({ id: u.id, role: e.target.value })}
+                        className="rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-xs text-cream focus:border-gold-500 focus:outline-none"
+                      >
+                        <option value="customer">Khách hàng</option>
+                        <option value="saler">Cộng tác viên</option>
+                        <option value="investor">Nhà đầu tư</option>
+                        <option value="admin">Quản trị viên</option>
+                      </select>
+                    </td>
                     <td>{formatDate(u.created_at)}</td>
                     <td>
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap text-xs font-medium">
@@ -174,6 +210,11 @@ function UsersInner() {
                         <ActionLink onClick={() => handleReset(u)} disabled={reset.isPending}>
                           Đặt lại MK
                         </ActionLink>
+                        {lockedSet.has(u.id) ? (
+                          <ActionLink onClick={() => lockM.mutate({ id: u.id, lock: false })} disabled={lockM.isPending}>Mở khoá</ActionLink>
+                        ) : (
+                          <ActionLink tone="danger" onClick={() => window.confirm(`Khoá tài khoản "${u.full_name}"? (dữ liệu giữ nguyên)`) && lockM.mutate({ id: u.id, lock: true })} disabled={lockM.isPending}>Khoá</ActionLink>
+                        )}
                         {u.role === "investor" && (
                           <ActionLink tone="danger" onClick={() => handleDelete(u)} disabled={del.isPending}>
                             Xoá
@@ -189,15 +230,9 @@ function UsersInner() {
         )}
       </section>
 
-      {detail && (
-        <section>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-cream">
-              Hồ sơ: {detail.full_name}
-            </h2>
-            <Button variant="ghost" onClick={() => setDetail(null)}>Đóng</Button>
-          </div>
-
+      <Modal open={!!detail} onClose={() => setDetail(null)} title={detail ? `Hồ sơ: ${detail.full_name}` : ""} size="lg">
+        {detail && (
+        <div>
           {profileLoading ? (
             <Spinner />
           ) : (
@@ -270,8 +305,9 @@ function UsersInner() {
               </>
             )}
           </Card>
-        </section>
-      )}
+        </div>
+        )}
+      </Modal>
     </div>
   );
 }

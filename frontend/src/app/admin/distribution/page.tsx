@@ -23,12 +23,22 @@ function DistInner() {
   const { data: dists, isLoading } = useQuery({ queryKey: ["admin-distributions"], queryFn: adminApi.distributions });
 
   const showPool = settings?.show_pool_public === "on";
+  const autoOn = settings?.dividend_auto_distribute === "on";
 
   const toggle = useMutation({
     mutationFn: (on: boolean) => adminApi.updateSettings({ show_pool_public: on ? "on" : "off" }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin-settings"] });
       qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+    onError: (e) => setError((e as ApiException).message),
+  });
+
+  const toggleAuto = useMutation({
+    mutationFn: (on: boolean) => adminApi.updateSettings({ dividend_auto_distribute: on ? "on" : "off" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-settings"] });
+      qc.invalidateQueries({ queryKey: ["sweep-preview"] });
     },
     onError: (e) => setError((e as ApiException).message),
   });
@@ -60,6 +70,29 @@ function DistInner() {
     },
     onError: (e) => setError((e as ApiException).message),
   });
+
+  // Quét cổ tức: số đơn thành công CHƯA gộp + pool 15% sẽ chia (tự tải, không ghi).
+  const { data: sweep } = useQuery({ queryKey: ["sweep-preview"], queryFn: adminApi.sweepPreview });
+
+  const runSweep = useMutation({
+    mutationFn: () => adminApi.sweepDividend(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-distributions"] });
+      qc.invalidateQueries({ queryKey: ["admin-dividends"] });
+      qc.invalidateQueries({ queryKey: ["pool"] });
+      qc.invalidateQueries({ queryKey: ["sweep-preview"] });
+    },
+    onError: (e) => setError((e as ApiException).message),
+  });
+
+  function handleSweep() {
+    if (!sweep || sweep.pool_vnd <= 0) return;
+    if (!window.confirm(
+      `Quét ${sweep.swept_orders} đơn thành công chưa gộp → chia Pool Cổ Đông ${formatVnd(sweep.pool_vnd)} cho nhà đầu tư (đồng chia + bonus theo hạng).\n\nTạo một đợt cổ tức THỰC (chưa chi tiền). Đơn đã gộp sẽ KHÔNG bị tính lại.`,
+    )) return;
+    setError(null);
+    runSweep.mutate();
+  }
 
   function handleDeleteDist(id: string, period: string) {
     if (!window.confirm(`Xoá lần phân bổ kỳ "${period}"?\n\nXoá cả đợt cổ tức + các khoản chia cho cổ đông của lần này. KHÔNG THỂ hoàn tác.`)) return;
@@ -149,6 +182,57 @@ function DistInner() {
         >
           <span className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-all ${showPool ? "left-6" : "left-1"}`} />
         </button>
+      </Card>
+
+      {/* CÔNG TẮC TỰ ĐỘNG CHIA CỔ TỨC — mỗi đơn thành công tự chia thẳng cho cổ đông */}
+      <Card className="flex flex-wrap items-center justify-between gap-4 border border-gold-500/30">
+        <div>
+          <p className="font-semibold text-cream">Tự động chia cổ tức mỗi đơn (realtime)</p>
+          <p className="text-sm text-cream/55">
+            Bật: mỗi đơn thành công tự gom 15% pool và chia thẳng cho cổ đông vào ví — không cần bấm
+            “Quét cổ tức”, không cần duyệt. Tắt: admin chủ động gom lô bên dưới.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => toggleAuto.mutate(!autoOn)}
+          disabled={toggleAuto.isPending}
+          className={`relative h-7 w-12 rounded-full transition ${autoOn ? "bg-gold-500" : "bg-white/15"}`}
+          aria-pressed={autoOn}
+        >
+          <span className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-all ${autoOn ? "left-6" : "left-1"}`} />
+        </button>
+      </Card>
+
+      {/* QUÉT CỔ TỨC TỪ ĐƠN HÀNG — gom 15% pool đã trích của đơn thành công chưa gộp */}
+      <Card className="space-y-4 border border-gold-500/30">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-gold-300">
+            Quét cổ tức từ đơn hàng
+          </h2>
+          <p className="mt-1 text-sm text-cream/55">
+            Mỗi đơn thành công đã trích sẵn {pool ? formatPct(pool.pool_rate * 100) : "15%"} làm{" "}
+            <strong className="text-cream/80">Pool Cổ Đông</strong>. Bấm để gom các đơn{" "}
+            <strong className="text-cream/80">chưa gộp</strong> (gồm cả đơn cũ) và chia cổ tức thực cho
+            nhà đầu tư theo đồng chia + bonus hạng. Idempotent — đơn đã gộp không bị tính lại.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Mini label="Đơn chưa gộp" value={sweep ? `${sweep.swept_orders} đơn` : "—"} />
+          <Mini label="Doanh thu các đơn" value={sweep ? formatVnd(sweep.revenue_vnd) : "—"} />
+          <Mini label="Pool cổ đông sẽ chia" value={sweep ? formatVnd(sweep.pool_vnd) : "—"} />
+        </div>
+        <Button
+          type="button"
+          disabled={runSweep.isPending || !sweep || sweep.pool_vnd <= 0}
+          onClick={handleSweep}
+        >
+          {runSweep.isPending
+            ? "Đang quét & chia..."
+            : sweep && sweep.pool_vnd > 0
+              ? `Quét & chia ${formatVnd(sweep.pool_vnd)} cho nhà đầu tư`
+              : "Không có đơn nào chưa gộp"}
+        </Button>
       </Card>
 
       {/* PHÂN BỔ */}

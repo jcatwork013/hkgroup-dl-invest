@@ -38,7 +38,8 @@ const ADMIN: Section[] = [
   {
     items: [
       { href: "/admin", label: "Bảng điều khiển" },
-      { href: "/admin/policy", label: "Quy trình & Chính sách" },
+      { href: "/admin/quy-trinh", label: "Quy trình & Cơ chế" },
+      { href: "/admin/policy", label: "Chính sách website" },
     ],
   },
   {

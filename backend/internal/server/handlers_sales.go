@@ -4,10 +4,86 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
+	"github.com/hkgroup/backend/internal/db"
 	"github.com/hkgroup/backend/internal/service"
 )
 
 func isAdmin(r *http.Request) bool { return userRole(r) == "admin" }
+
+// ----------------------------- Sản phẩm (CÔNG KHAI) -----------------------------
+// Website bán hàng duoclieuhk.vn đọc catalog qua 2 route công khai này (không auth,
+// chỉ trả hàng đang bán). Nguồn dữ liệu duy nhất vẫn là admin CMS ở HK SHAREHOLDER.
+
+// publicProduct: DTO công khai — CỐ Ý loại bỏ cost_vnd (giá vốn/biên lợi nhuận nội bộ),
+// category_id, active và timestamp. Chỉ lộ những gì cần cho trang bán hàng.
+type publicProduct struct {
+	ID           string `json:"id"`
+	Sku          string `json:"sku"`
+	Name         string `json:"name"`
+	Slug         string `json:"slug"`
+	Badge        string `json:"badge"`
+	PriceVnd     int64  `json:"price_vnd"`
+	ImageURL     string `json:"image_url"`
+	Summary      string `json:"summary"`
+	Description  string `json:"description"`
+	SpecWarranty string `json:"spec_warranty"`
+	SpecTrace    string `json:"spec_trace"`
+	SpecDelivery string `json:"spec_delivery"`
+	SpecReturn   string `json:"spec_return"`
+}
+
+func toPublicProduct(p db.Product) publicProduct {
+	return publicProduct{
+		ID: p.ID.String(), Sku: p.Sku, Name: p.Name, Slug: p.Slug, Badge: p.Badge,
+		PriceVnd: p.PriceVnd, ImageURL: p.ImageUrl, Summary: p.Summary, Description: p.Description,
+		SpecWarranty: p.SpecWarranty, SpecTrace: p.SpecTrace,
+		SpecDelivery: p.SpecDelivery, SpecReturn: p.SpecReturn,
+	}
+}
+
+func (s *Server) handlePublicProducts(w http.ResponseWriter, r *http.Request) {
+	products, err := s.sales.ListActiveProducts(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	out := make([]publicProduct, 0, len(products))
+	for _, p := range products {
+		out = append(out, toPublicProduct(p))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"products": out})
+}
+
+// handlePublicCheckout: khách đặt hàng online từ giỏ hàng (không cần đăng nhập).
+func (s *Server) handlePublicCheckout(w http.ResponseWriter, r *http.Request) {
+	var in service.PublicCheckoutInput
+	if err := decode(r, &in); err != nil {
+		writeError(w, err)
+		return
+	}
+	res, err := s.sales.PublicCheckout(r.Context(), in)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, res)
+}
+
+func (s *Server) handlePublicProductBySlug(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	if slug == "" {
+		writeError(w, service.ErrValidation)
+		return
+	}
+	p, err := s.sales.GetActiveProductBySlug(r.Context(), slug)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toPublicProduct(p))
+}
 
 // ----------------------------- Danh mục (admin) -----------------------------
 
@@ -265,6 +341,16 @@ func (s *Server) handleMyOrders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, orders)
 }
 
+// handleMyCustomerOrders — lịch sử đơn MUA của người đang đăng nhập (khớp theo SĐT hồ sơ).
+func (s *Server) handleMyCustomerOrders(w http.ResponseWriter, r *http.Request) {
+	orders, err := s.sales.ListMyCustomerOrders(r.Context(), userID(r))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, orders)
+}
+
 // ----------------------------- Giám sát saler -----------------------------
 
 func (s *Server) handleSalerStats(w http.ResponseWriter, r *http.Request) {
@@ -292,4 +378,18 @@ func (s *Server) handleMySalesCommissions(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, cs)
+}
+
+// handleDeleteOrder — admin xoá đơn bán.
+func (s *Server) handleDeleteOrder(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.sales.DeleteOrder(r.Context(), userID(r), id); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

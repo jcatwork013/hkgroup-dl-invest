@@ -78,6 +78,49 @@ func (s *IdentityService) Register(ctx context.Context, in RegisterInput) (db.Us
 	return user, tokens, err
 }
 
+// RegisterCustomer: tự đăng ký ở duoclieuhk.vn → tài khoản KHÁCH HÀNG (role=customer).
+// Chưa phải CTV, mã giới thiệu chưa dùng tới cho tới khi được duyệt làm affiliate.
+func (s *IdentityService) RegisterCustomer(ctx context.Context, in RegisterInput) (db.User, Tokens, error) {
+	in.Email = strings.TrimSpace(strings.ToLower(in.Email))
+	if in.FullName == "" || in.Phone == "" || in.Email == "" {
+		return db.User{}, Tokens{}, ErrValidation
+	}
+	if len(in.Password) < 8 {
+		return db.User{}, Tokens{}, errors.Join(ErrValidation, errors.New("password must be at least 8 characters"))
+	}
+	hash, err := security.HashPassword(in.Password)
+	if err != nil {
+		return db.User{}, Tokens{}, err
+	}
+	user, err := s.store.CreateUser(ctx, db.CreateUserParams{
+		FullName:     in.FullName,
+		Phone:        in.Phone,
+		Email:        in.Email,
+		PasswordHash: hash,
+		Role:         db.UserRoleCustomer,
+		ReferralCode: idgen.ReferralCode(), // sinh sẵn (unique) nhưng chỉ lộ khi thành CTV
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			return db.User{}, Tokens{}, ErrConflict
+		}
+		return db.User{}, Tokens{}, err
+	}
+
+	// "Ăn ref": nếu đăng ký qua link giới thiệu (?ref=<mã>), KHOÁ FIRST-TOUCH theo SĐT khách →
+	// từ nay MỌI đơn của SĐT này gán affiliate = người giới thiệu (checkout đã honor lock). Chỉ nhận
+	// mã của CTV (saler) và không tự giới thiệu chính mình. Best-effort: KHÔNG làm hỏng đăng ký.
+	if code := strings.TrimSpace(in.ReferralCode); code != "" {
+		if ref, e := s.store.GetUserByReferralCode(ctx, code); e == nil &&
+			ref.ID != user.ID && ref.Role == db.UserRoleSaler {
+			_ = s.store.SetReferralLockIfAbsent(ctx, user.Phone, ref.ID)
+		}
+	}
+
+	tokens, err := s.issueTokens(user)
+	return user, tokens, err
+}
+
 func (s *IdentityService) Login(ctx context.Context, email, password string) (db.User, Tokens, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
 	user, err := s.store.GetUserByEmail(ctx, email)
@@ -90,8 +133,56 @@ func (s *IdentityService) Login(ctx context.Context, email, password string) (db
 	if !security.CheckPassword(user.PasswordHash, password) {
 		return db.User{}, Tokens{}, ErrInvalidCredential
 	}
+	// Tài khoản bị khoá → chặn đăng nhập (dữ liệu vẫn giữ nguyên).
+	if locked, _ := s.store.IsUserLocked(ctx, user.ID); locked {
+		return db.User{}, Tokens{}, ErrAccountLocked
+	}
 	tokens, err := s.issueTokens(user)
 	return user, tokens, err
+}
+
+// AdminSetRole: admin đổi vai trò (thăng/giáng chức). role ∈ {customer, saler, investor, admin}.
+func (s *IdentityService) AdminSetRole(ctx context.Context, admin, target uuid.UUID, role string) error {
+	var r db.UserRole
+	switch role {
+	case "customer":
+		r = db.UserRoleCustomer
+	case "saler":
+		r = db.UserRoleSaler
+	case "investor":
+		r = db.UserRoleInvestor
+	case "admin":
+		r = db.UserRoleAdmin
+	default:
+		return ErrValidation
+	}
+	return s.store.ExecTx(ctx, func(q *db.Queries) error {
+		if e := q.UpdateUserRole(ctx, target, r); e != nil {
+			return e
+		}
+		return audit.Write(ctx, q, audit.Actor(admin), "user.set_role", "users", target.String(), nil, map[string]string{"role": role})
+	})
+}
+
+// AdminLock / AdminUnlock: khoá/mở tài khoản (chỉ chặn login, không mất dữ liệu).
+func (s *IdentityService) AdminLock(ctx context.Context, admin, target uuid.UUID) error {
+	return s.store.ExecTx(ctx, func(q *db.Queries) error {
+		if e := q.LockUser(ctx, target, admin); e != nil {
+			return e
+		}
+		return audit.Write(ctx, q, audit.Actor(admin), "user.lock", "users", target.String(), nil, nil)
+	})
+}
+func (s *IdentityService) AdminUnlock(ctx context.Context, admin, target uuid.UUID) error {
+	return s.store.ExecTx(ctx, func(q *db.Queries) error {
+		if e := q.UnlockUser(ctx, target); e != nil {
+			return e
+		}
+		return audit.Write(ctx, q, audit.Actor(admin), "user.unlock", "users", target.String(), nil, nil)
+	})
+}
+func (s *IdentityService) ListLockedUserIDs(ctx context.Context) ([]uuid.UUID, error) {
+	return s.store.ListLockedUserIDs(ctx)
 }
 
 func (s *IdentityService) Refresh(ctx context.Context, refreshToken string) (Tokens, error) {

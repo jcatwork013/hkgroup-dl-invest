@@ -30,9 +30,12 @@ func NewUploadService(s *store.Store, crypto *security.Cryptor, baseDir string) 
 
 var allowedImageTypes = map[string]bool{
 	"image/jpeg": true,
+	"image/jpg":  true, // vài trình duyệt gửi jpg thay vì jpeg
 	"image/png":  true,
 	"image/webp": true,
 	"image/heic": true,
+	"image/heif": true, // ảnh iPhone (HEIC) đôi khi content-type là heif
+	"image/gif":  true,
 }
 
 // Save encrypts and stores an image, returns the upload row.

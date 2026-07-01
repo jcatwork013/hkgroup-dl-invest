@@ -54,6 +54,7 @@ export default function OrdersPanel({ admin }: { admin: boolean }) {
   });
   const pay = useMutation({ mutationFn: (id: string) => salesApi.payOrder(id), onSuccess: () => { refresh(); if (detailId) qc.invalidateQueries({ queryKey: ["order-detail", detailId] }); }, onError: onErr });
   const cancel = useMutation({ mutationFn: (id: string) => salesApi.cancelOrder(id), onSuccess: refresh, onError: onErr });
+  const del = useMutation({ mutationFn: (id: string) => adminApi.deleteOrder(id), onSuccess: () => { refresh(); setDetailId(null); }, onError: onErr });
 
   function addToCart() {
     const p = products?.find((x) => x.id === pickProduct);
@@ -153,6 +154,7 @@ export default function OrdersPanel({ admin }: { admin: boolean }) {
                 <th className="text-left">Mã đơn</th>
                 {admin && <th className="text-left">Người bán</th>}
                 <th className="text-left">Khách</th>
+                <th className="text-left">Affiliate (giới thiệu)</th>
                 <th className="text-right">Tổng</th>
                 <th className="text-left">Trạng thái</th>
                 <th className="text-right">Thao tác</th>
@@ -164,6 +166,13 @@ export default function OrdersPanel({ admin }: { admin: boolean }) {
                   <td className="font-mono text-cream">{o.code}</td>
                   {admin && <td className="text-cream/70">{o.seller_name}</td>}
                   <td className="text-cream/70">{o.customer_name || "—"}</td>
+                  <td className="text-cream/70">
+                    {o.affiliate_name ? (
+                      <span className="text-gold-300">{o.affiliate_name}</span>
+                    ) : (
+                      <span className="text-cream/35">— (trực tiếp)</span>
+                    )}
+                  </td>
                   <td className="text-right font-mono text-cream">{formatVnd(o.subtotal_vnd)}</td>
                   <td><Badge tone={statusTone(o.status)}>{statusLabel(o.status)}</Badge></td>
                   <td className="text-right whitespace-nowrap">
@@ -171,8 +180,11 @@ export default function OrdersPanel({ admin }: { admin: boolean }) {
                     {o.status === "pending" && (
                       <>
                         <button onClick={() => pay.mutate(o.id)} className="mr-3 text-brand-300 hover:underline">Đã thanh toán</button>
-                        <button onClick={() => window.confirm(`Huỷ đơn ${o.code}?`) && cancel.mutate(o.id)} className="text-red-300 hover:underline">Huỷ</button>
+                        <button onClick={() => window.confirm(`Huỷ đơn ${o.code}?`) && cancel.mutate(o.id)} className="mr-3 text-red-300 hover:underline">Huỷ</button>
                       </>
+                    )}
+                    {admin && (
+                      <button onClick={() => window.confirm(`XOÁ hẳn đơn ${o.code}? Không thể hoàn tác.`) && del.mutate(o.id)} className="text-red-400 hover:underline">Xoá</button>
                     )}
                   </td>
                 </tr>

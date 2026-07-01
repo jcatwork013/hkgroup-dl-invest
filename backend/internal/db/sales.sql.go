@@ -99,12 +99,12 @@ func (q *Queries) DeleteProductCategory(ctx context.Context, id uuid.UUID) error
 
 // ================================ PRODUCTS ================================
 
-const productCols = `id, category_id, sku, name, badge, price_vnd, cost_vnd, image_url, summary, description, spec_warranty, spec_trace, spec_delivery, spec_return, active, created_at, updated_at`
+const productCols = `id, category_id, sku, name, slug, badge, price_vnd, cost_vnd, image_url, summary, description, spec_warranty, spec_trace, spec_delivery, spec_return, active, created_at, updated_at`
 
 func scanProduct(row interface{ Scan(...any) error }) (Product, error) {
 	var i Product
 	err := row.Scan(
-		&i.ID, &i.CategoryID, &i.Sku, &i.Name, &i.Badge, &i.PriceVnd, &i.CostVnd, &i.ImageUrl,
+		&i.ID, &i.CategoryID, &i.Sku, &i.Name, &i.Slug, &i.Badge, &i.PriceVnd, &i.CostVnd, &i.ImageUrl,
 		&i.Summary, &i.Description, &i.SpecWarranty, &i.SpecTrace, &i.SpecDelivery, &i.SpecReturn,
 		&i.Active, &i.CreatedAt, &i.UpdatedAt,
 	)
@@ -112,14 +112,15 @@ func scanProduct(row interface{ Scan(...any) error }) (Product, error) {
 }
 
 const createProduct = `-- name: CreateProduct :one
-INSERT INTO products (category_id, sku, name, badge, price_vnd, cost_vnd, image_url, summary, description, spec_warranty, spec_trace, spec_delivery, spec_return, active)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+INSERT INTO products (category_id, sku, name, slug, badge, price_vnd, cost_vnd, image_url, summary, description, spec_warranty, spec_trace, spec_delivery, spec_return, active)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 RETURNING ` + productCols
 
 type CreateProductParams struct {
 	CategoryID   uuid.NullUUID `json:"category_id"`
 	Sku          string        `json:"sku"`
 	Name         string        `json:"name"`
+	Slug         string        `json:"slug"`
 	Badge        string        `json:"badge"`
 	PriceVnd     int64         `json:"price_vnd"`
 	CostVnd      int64         `json:"cost_vnd"`
@@ -135,7 +136,7 @@ type CreateProductParams struct {
 
 func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (Product, error) {
 	row := q.db.QueryRow(ctx, createProduct,
-		arg.CategoryID, arg.Sku, arg.Name, arg.Badge, arg.PriceVnd, arg.CostVnd, arg.ImageUrl,
+		arg.CategoryID, arg.Sku, arg.Name, arg.Slug, arg.Badge, arg.PriceVnd, arg.CostVnd, arg.ImageUrl,
 		arg.Summary, arg.Description, arg.SpecWarranty, arg.SpecTrace, arg.SpecDelivery, arg.SpecReturn, arg.Active,
 	)
 	return scanProduct(row)
@@ -192,11 +193,21 @@ func (q *Queries) GetProduct(ctx context.Context, id uuid.UUID) (Product, error)
 	return scanProduct(row)
 }
 
+// GetActiveProductBySlug — dùng cho website bán hàng công khai: chỉ trả sản phẩm đang bán.
+const getActiveProductBySlug = `-- name: GetActiveProductBySlug :one
+SELECT ` + productCols + ` FROM products WHERE slug = $1 AND active = true
+`
+
+func (q *Queries) GetActiveProductBySlug(ctx context.Context, slug string) (Product, error) {
+	row := q.db.QueryRow(ctx, getActiveProductBySlug, slug)
+	return scanProduct(row)
+}
+
 const updateProduct = `-- name: UpdateProduct :one
 UPDATE products SET
-    category_id = $2, sku = $3, name = $4, badge = $5, price_vnd = $6, cost_vnd = $7,
-    image_url = $8, summary = $9, description = $10, spec_warranty = $11, spec_trace = $12,
-    spec_delivery = $13, spec_return = $14, active = $15, updated_at = now()
+    category_id = $2, sku = $3, name = $4, slug = $5, badge = $6, price_vnd = $7, cost_vnd = $8,
+    image_url = $9, summary = $10, description = $11, spec_warranty = $12, spec_trace = $13,
+    spec_delivery = $14, spec_return = $15, active = $16, updated_at = now()
 WHERE id = $1
 RETURNING ` + productCols
 
@@ -205,6 +216,7 @@ type UpdateProductParams struct {
 	CategoryID   uuid.NullUUID `json:"category_id"`
 	Sku          string        `json:"sku"`
 	Name         string        `json:"name"`
+	Slug         string        `json:"slug"`
 	Badge        string        `json:"badge"`
 	PriceVnd     int64         `json:"price_vnd"`
 	CostVnd      int64         `json:"cost_vnd"`
@@ -220,7 +232,7 @@ type UpdateProductParams struct {
 
 func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (Product, error) {
 	row := q.db.QueryRow(ctx, updateProduct,
-		arg.ID, arg.CategoryID, arg.Sku, arg.Name, arg.Badge, arg.PriceVnd, arg.CostVnd, arg.ImageUrl,
+		arg.ID, arg.CategoryID, arg.Sku, arg.Name, arg.Slug, arg.Badge, arg.PriceVnd, arg.CostVnd, arg.ImageUrl,
 		arg.Summary, arg.Description, arg.SpecWarranty, arg.SpecTrace, arg.SpecDelivery, arg.SpecReturn, arg.Active,
 	)
 	return scanProduct(row)

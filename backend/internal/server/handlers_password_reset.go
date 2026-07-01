@@ -69,9 +69,11 @@ func (s *Server) handleAdminResetPassword(w http.ResponseWriter, r *http.Request
 		writeError(w, service.ErrValidation)
 		return
 	}
-	if err := s.passwordReset.AdminRequestReset(r.Context(), userID(r), id, s.resetBaseURL(r)); err != nil {
+	pw, err := s.passwordReset.AdminSetNewPassword(r.Context(), userID(r), id)
+	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	// Trả mật khẩu mới để admin gửi cho người dùng (đổi trực tiếp, không qua email).
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "password": pw})
 }

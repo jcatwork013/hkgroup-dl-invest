@@ -76,6 +76,14 @@ export interface TieredPlan {
   scaled: boolean;
 }
 
+// Kết quả xem trước / thực thi "Quét cổ tức" (gom 15% pool của đơn thành công chưa gộp).
+export interface SweepResult {
+  swept_orders: number;
+  revenue_vnd: number;
+  pool_vnd: number;
+  plan: TieredPlan | null;
+}
+
 export interface OfferingResponse {
   offering: Offering;
   tiers: OfferingTier[];

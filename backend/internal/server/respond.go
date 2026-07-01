@@ -30,6 +30,8 @@ func writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusUnauthorized, errBody{"invalid credentials", "unauthorized"})
 	case errors.Is(err, service.ErrForbidden):
 		writeJSON(w, http.StatusForbidden, errBody{"forbidden", "forbidden"})
+	case errors.Is(err, service.ErrAccountLocked):
+		writeJSON(w, http.StatusForbidden, errBody{err.Error(), "account_locked"})
 	case errors.Is(err, service.ErrConflict):
 		writeJSON(w, http.StatusConflict, errBody{err.Error(), "conflict"})
 	case errors.Is(err, service.ErrKYCNotApproved):
@@ -40,6 +42,8 @@ func writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errBody{err.Error(), "invalid_state"})
 	case errors.Is(err, service.ErrPoolExhausted):
 		writeJSON(w, http.StatusConflict, errBody{"offering pool exhausted", "pool_exhausted"})
+	case errors.Is(err, service.ErrNothingToSweep):
+		writeJSON(w, http.StatusConflict, errBody{err.Error(), "nothing_to_sweep"})
 	case errors.Is(err, service.ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errBody{err.Error(), "validation"})
 	default:
